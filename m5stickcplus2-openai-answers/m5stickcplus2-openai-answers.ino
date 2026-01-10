@@ -1,37 +1,36 @@
+#include "secrets.h"
+#include <HTTPClient.h>
 #include <M5Unified.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
-#include <HTTPClient.h>
 
-static const int WIDTH  = 240;
+static const int WIDTH = 240;
 static const int HEIGHT = 135;
 
-const char* WIFI_SSID     = "name";
-const char* WIFI_PASS     = "password";
-const char* OPENAI_API_KEY = "sk-proj-xxxx";
+// Credentials are now in secrets.h
 
 // Audio settings
-static const int SAMPLE_RATE = 16000;
+static const int SAMPLE_RATE = 8000;
 static const int RECORD_SECONDS = 5;
 static const int RECORD_SAMPLES = SAMPLE_RATE * RECORD_SECONDS;
-static int16_t* audioBuffer = nullptr;
+static int16_t *audioBuffer = nullptr;
 
 String response = "Press A\nto ask a question";
 
 void drawScreen(const String &text) {
-  M5Canvas canvas(&M5.Display);
-  canvas.createSprite(WIDTH, HEIGHT);
-  canvas.fillSprite(TFT_BLACK);
-  canvas.setTextColor(TFT_WHITE);
-  canvas.setTextDatum(MC_DATUM);
-  canvas.setTextFont(2);
+  Serial.println("Drawing to screen: " + text);
+  M5.Display.fillScreen(TFT_BLACK);
+  M5.Display.setTextColor(TFT_WHITE);
+  M5.Display.setTextDatum(MC_DATUM);
+  M5.Display.setTextFont(2);
 
   int lineCount = 1;
   for (unsigned int i = 0; i < text.length(); i++) {
-    if (text[i] == '\n') lineCount++;
+    if (text[i] == '\n')
+      lineCount++;
   }
 
-  int lineHeight = canvas.fontHeight() + 4;
+  int lineHeight = M5.Display.fontHeight() + 4;
   int startY = (HEIGHT - lineCount * lineHeight) / 2 + lineHeight / 2;
 
   int lineNum = 0;
@@ -39,14 +38,11 @@ void drawScreen(const String &text) {
   for (unsigned int i = 0; i <= text.length(); i++) {
     if (i == text.length() || text[i] == '\n') {
       String line = text.substring(lineStart, i);
-      canvas.drawString(line, WIDTH / 2, startY + lineNum * lineHeight);
+      M5.Display.drawString(line, WIDTH / 2, startY + lineNum * lineHeight);
       lineNum++;
       lineStart = i + 1;
     }
   }
-
-  canvas.pushSprite(0, 0);
-  canvas.deleteSprite();
 }
 
 void drawProgress(int seconds) {
@@ -56,10 +52,11 @@ void drawProgress(int seconds) {
 
 bool recordAudio() {
   Serial.println("\n========== RECORDING ==========");
-  
+
   if (!audioBuffer) {
-    Serial.printf("Allocating buffer: %d samples, %d bytes\n", RECORD_SAMPLES, RECORD_SAMPLES * sizeof(int16_t));
-    audioBuffer = (int16_t*)malloc(RECORD_SAMPLES * sizeof(int16_t));
+    Serial.printf("Allocating buffer: %d samples, %d bytes\n", RECORD_SAMPLES,
+                  RECORD_SAMPLES * sizeof(int16_t));
+    audioBuffer = (int16_t *)malloc(RECORD_SAMPLES * sizeof(int16_t));
     if (!audioBuffer) {
       Serial.println("ERROR: Failed to allocate audio buffer!");
       return false;
@@ -71,17 +68,18 @@ bool recordAudio() {
 
   Serial.println("Starting mic...");
   M5.Mic.begin();
-  
+
   int samplesPerSecond = SAMPLE_RATE;
   for (int sec = 0; sec < RECORD_SECONDS; sec++) {
     Serial.printf("Recording second %d/%d...\n", sec + 1, RECORD_SECONDS);
     drawProgress(RECORD_SECONDS - sec);
-    M5.Mic.record(&audioBuffer[sec * samplesPerSecond], samplesPerSecond, SAMPLE_RATE);
+    M5.Mic.record(&audioBuffer[sec * samplesPerSecond], samplesPerSecond,
+                  SAMPLE_RATE);
     while (M5.Mic.isRecording()) {
       delay(10);
     }
   }
-  
+
   M5.Mic.end();
   Serial.println("Recording complete");
 
@@ -89,17 +87,20 @@ bool recordAudio() {
   int16_t minVal = 32767, maxVal = -32768;
   int64_t sum = 0;
   for (int i = 0; i < RECORD_SAMPLES; i++) {
-    if (audioBuffer[i] < minVal) minVal = audioBuffer[i];
-    if (audioBuffer[i] > maxVal) maxVal = audioBuffer[i];
+    if (audioBuffer[i] < minVal)
+      minVal = audioBuffer[i];
+    if (audioBuffer[i] > maxVal)
+      maxVal = audioBuffer[i];
     sum += abs(audioBuffer[i]);
   }
-  Serial.printf("Audio stats: min=%d, max=%d, avg=%lld\n", minVal, maxVal, sum / RECORD_SAMPLES);
+  Serial.printf("Audio stats: min=%d, max=%d, avg=%lld\n", minVal, maxVal,
+                sum / RECORD_SAMPLES);
   Serial.println("================================\n");
-  
+
   return true;
 }
 
-void createWavHeader(uint8_t* header, int dataSize) {
+void createWavHeader(uint8_t *header, int dataSize) {
   int fileSize = dataSize + 36;
   int byteRate = SAMPLE_RATE * 1 * 16 / 8;
   int blockAlign = 1 * 16 / 8;
@@ -111,9 +112,14 @@ void createWavHeader(uint8_t* header, int dataSize) {
   header[7] = (fileSize >> 24) & 0xFF;
   memcpy(header + 8, "WAVE", 4);
   memcpy(header + 12, "fmt ", 4);
-  header[16] = 16; header[17] = 0; header[18] = 0; header[19] = 0;
-  header[20] = 1; header[21] = 0;
-  header[22] = 1; header[23] = 0;
+  header[16] = 16;
+  header[17] = 0;
+  header[18] = 0;
+  header[19] = 0;
+  header[20] = 1;
+  header[21] = 0;
+  header[22] = 1;
+  header[23] = 0;
   header[24] = SAMPLE_RATE & 0xFF;
   header[25] = (SAMPLE_RATE >> 8) & 0xFF;
   header[26] = (SAMPLE_RATE >> 16) & 0xFF;
@@ -122,8 +128,10 @@ void createWavHeader(uint8_t* header, int dataSize) {
   header[29] = (byteRate >> 8) & 0xFF;
   header[30] = (byteRate >> 16) & 0xFF;
   header[31] = (byteRate >> 24) & 0xFF;
-  header[32] = blockAlign; header[33] = 0;
-  header[34] = 16; header[35] = 0;
+  header[32] = blockAlign;
+  header[33] = 0;
+  header[34] = 16;
+  header[35] = 0;
   memcpy(header + 36, "data", 4);
   header[40] = dataSize & 0xFF;
   header[41] = (dataSize >> 8) & 0xFF;
@@ -133,7 +141,7 @@ void createWavHeader(uint8_t* header, int dataSize) {
 
 String transcribeAudio() {
   Serial.println("\n========== TRANSCRIBING ==========");
-  
+
   WiFiClientSecure client;
   client.setInsecure();
   client.setTimeout(60);
@@ -150,48 +158,68 @@ String transcribeAudio() {
   createWavHeader(wavHeader, audioDataSize);
 
   String boundary = "----ESP32Boundary";
-  
+
   String bodyStart = "--" + boundary + "\r\n";
-  bodyStart += "Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n";
+  bodyStart += "Content-Disposition: form-data; name=\"file\"; "
+               "filename=\"audio.wav\"\r\n";
   bodyStart += "Content-Type: audio/wav\r\n\r\n";
-  
+
   String bodyEnd = "\r\n--" + boundary + "\r\n";
   bodyEnd += "Content-Disposition: form-data; name=\"model\"\r\n\r\n";
   bodyEnd += "whisper-1\r\n";
   bodyEnd += "--" + boundary + "--\r\n";
 
-  int contentLength = bodyStart.length() + 44 + audioDataSize + bodyEnd.length();
-  Serial.printf("Content length: %d bytes (audio: %d bytes)\n", contentLength, audioDataSize);
+  int contentLength =
+      bodyStart.length() + 44 + audioDataSize + bodyEnd.length();
+  Serial.printf("Content length: %d bytes (audio: %d bytes)\n", contentLength,
+                audioDataSize);
 
   Serial.println("Sending request headers...");
   client.print("POST /v1/audio/transcriptions HTTP/1.1\r\n");
   client.print("Host: api.openai.com\r\n");
   client.print("Authorization: Bearer " + String(OPENAI_API_KEY) + "\r\n");
-  client.print("Content-Type: multipart/form-data; boundary=" + boundary + "\r\n");
+  client.print("Content-Type: multipart/form-data; boundary=" + boundary +
+               "\r\n");
   client.print("Content-Length: " + String(contentLength) + "\r\n");
   client.print("Connection: close\r\n\r\n");
 
   Serial.println("Sending audio data...");
   client.print(bodyStart);
   client.write(wavHeader, 44);
-  
-  // Send in chunks to avoid watchdog
-  int chunkSize = 4096;
-  uint8_t* ptr = (uint8_t*)audioBuffer;
+
+  // Send in chunks to avoid watchdog and network buffer issues
+  int chunkSize = 1024;
+  uint8_t *ptr = (uint8_t *)audioBuffer;
   int remaining = audioDataSize;
   int sent = 0;
+
   while (remaining > 0) {
+    if (!client.connected()) {
+      Serial.println("ERROR: Connection lost during upload");
+      return "Connection lost";
+    }
+
     int toSend = min(chunkSize, remaining);
-    client.write(ptr, toSend);
-    ptr += toSend;
-    remaining -= toSend;
-    sent += toSend;
-    if (sent % 16384 == 0) {
+    int written = client.write(ptr, toSend);
+
+    if (written == 0) {
+      Serial.println("WARNING: 0 bytes written, retrying...");
+      delay(100);
+      if (!client.connected())
+        break;
+      continue;
+    }
+
+    ptr += written;
+    remaining -= written;
+    sent += written;
+
+    if (sent % 8192 == 0) {
       Serial.printf("  Sent %d / %d bytes\n", sent, audioDataSize);
     }
-    delay(1);
+    delay(2); // Small delay to let network stack process
   }
-  
+
   client.print(bodyEnd);
   Serial.println("Request sent, waiting for response...");
 
@@ -209,7 +237,8 @@ String transcribeAudio() {
   while (client.connected()) {
     String line = client.readStringUntil('\n');
     Serial.println("  " + line);
-    if (line == "\r") break;
+    if (line == "\r")
+      break;
   }
 
   String response = client.readString();
@@ -223,14 +252,14 @@ String transcribeAudio() {
     Serial.println("ERROR: No 'text' field in response!");
     return "No transcription";
   }
-  
+
   int start = response.indexOf('"', textIdx + 6);
   if (start < 0) {
     Serial.println("ERROR: Parse error!");
     return "Parse error";
   }
   start++;
-  
+
   String result;
   bool escaped = false;
   for (unsigned int i = start; i < response.length(); i++) {
@@ -246,17 +275,17 @@ String transcribeAudio() {
       result += c;
     }
   }
-  
+
   Serial.println("Transcription: " + result);
   Serial.println("==================================\n");
-  
+
   return result;
 }
 
 String askGPT(const String &question) {
   Serial.println("\n========== ASKING GPT ==========");
   Serial.println("Question: " + question);
-  
+
   HTTPClient http;
   WiFiClientSecure client;
   client.setInsecure();
@@ -272,25 +301,26 @@ String askGPT(const String &question) {
   escaped.replace("\"", "\\\"");
   escaped.replace("\n", " ");
 
-  String body =
-    "{"
-      "\"model\":\"gpt-5-mini\","
-      "\"input\":["
-        "{"
-          "\"role\":\"user\","
-          "\"content\":["
-            "{"
-              "\"type\":\"input_text\","
-              "\"text\":\"" + escaped + " Answer in 20 words or less.\""
-            "}"
-          "]"
-        "}"
-      "]"
-    "}";
+  String body = "{"
+                "\"model\":\"gpt-4o-mini\","
+                "\"input\":["
+                "{"
+                "\"role\":\"user\","
+                "\"content\":["
+                "{"
+                "\"type\":\"input_text\","
+                "\"text\":\"" +
+                escaped +
+                " Answer in 20 words or less.\""
+                "}"
+                "]"
+                "}"
+                "]"
+                "}";
 
   Serial.println("Sending request...");
   Serial.println("Body: " + body);
-  
+
   int httpCode = http.POST(body);
   Serial.printf("HTTP response code: %d\n", httpCode);
 
@@ -331,9 +361,13 @@ String askGPT(const String &question) {
   for (unsigned int i = start; i < resp.length(); i++) {
     char c = resp[i];
     if (esc) {
-      if (c == 'n') result += '\n';
-      else if (c == 'u') { i += 4; result += '-'; }
-      else result += c;
+      if (c == 'n')
+        result += '\n';
+      else if (c == 'u') {
+        i += 4;
+        result += '-';
+      } else
+        result += c;
       esc = false;
     } else if (c == '\\') {
       esc = true;
@@ -354,10 +388,10 @@ String wordWrap(const String &text, int maxChars) {
   String result;
   String word;
   int lineLen = 0;
-  
+
   for (unsigned int i = 0; i <= text.length(); i++) {
     char c = (i < text.length()) ? text[i] : ' ';
-    
+
     if (c == ' ' || c == '\n') {
       if (lineLen + word.length() > maxChars) {
         result += '\n';
@@ -366,7 +400,7 @@ String wordWrap(const String &text, int maxChars) {
       result += word;
       lineLen += word.length();
       word = "";
-      
+
       if (c == ' ' && lineLen > 0) {
         result += ' ';
         lineLen++;
@@ -379,14 +413,14 @@ String wordWrap(const String &text, int maxChars) {
       word += c;
     }
   }
-  
+
   return result;
 }
 
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  
+
   Serial.println("\n\n========================================");
   Serial.println("       M5StickC Plus Voice Assistant");
   Serial.println("========================================\n");
@@ -399,17 +433,35 @@ void setup() {
 
   Serial.print("Connecting to WiFi: ");
   Serial.println(WIFI_SSID);
-  
+
   WiFi.begin(WIFI_SSID, WIFI_PASS);
+  int attempt = 0;
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
+    attempt++;
+    if (attempt % 10 == 0) {
+      Serial.printf("\nWiFi Status: %d\n", WiFi.status());
+      // 255: WL_NO_SHIELD, 0: WL_IDLE_STATUS, 1: WL_NO_SSID_AVAIL
+      // 2: WL_SCAN_COMPLETED, 3: WL_CONNECTED, 4: WL_CONNECT_FAILED
+      // 5: WL_CONNECTION_LOST, 6: WL_DISCONNECTED
+    }
   }
-  
+
   Serial.println("\nWiFi connected!");
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
   Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
+
+  // Pre-allocate audio buffer
+  audioBuffer = (int16_t *)malloc(RECORD_SAMPLES * sizeof(int16_t));
+  if (!audioBuffer) {
+    Serial.println("CRITICAL ERROR: Failed to allocate audio buffer!");
+    drawScreen("Mem Error");
+    while (1)
+      delay(100);
+  }
+  Serial.println("Audio buffer allocated");
 
   drawScreen("Press A\nto ask a question");
   Serial.println("\nReady! Press button A to ask a question.\n");
@@ -421,7 +473,7 @@ void loop() {
   if (M5.BtnA.wasClicked()) {
     Serial.println("\n*** BUTTON A PRESSED ***\n");
     Serial.printf("Free heap before recording: %d bytes\n", ESP.getFreeHeap());
-    
+
     if (!recordAudio()) {
       drawScreen("Mic error");
       delay(2000);
@@ -434,7 +486,9 @@ void loop() {
     drawScreen("Transcribing...");
     String question = transcribeAudio();
 
-    if (question.length() < 2 || question.startsWith("No ") || question.startsWith("Parse") || question.startsWith("Connection") || question.startsWith("Timeout")) {
+    if (question.length() < 2 || question.startsWith("No ") ||
+        question.startsWith("Parse") || question.startsWith("Connection") ||
+        question.startsWith("Timeout")) {
       Serial.println("Transcription failed or empty");
       drawScreen("Couldn't hear.\nTry again.");
       delay(2000);
@@ -444,12 +498,12 @@ void loop() {
 
     drawScreen("Thinking...");
     String answer = askGPT(question);
-    
+
     response = wordWrap(answer, 25);
     Serial.println("Final display text:");
     Serial.println(response);
     drawScreen(response);
-    
+
     Serial.printf("Free heap at end: %d bytes\n", ESP.getFreeHeap());
     Serial.println("\n*** INTERACTION COMPLETE ***\n");
   }

@@ -1,0 +1,13 @@
+# Secrets
+secrets.h
+
+# Build artifacts
+bin/
+build/
+*.elf
+*.bin
+*.map
+*.hex
+
+# OS files
+.DS_Store
