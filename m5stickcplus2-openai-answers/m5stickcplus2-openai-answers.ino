@@ -4,8 +4,9 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 
-static const int WIDTH = 240;
-static const int HEIGHT = 135;
+// Display dimensions - set dynamically in setup()
+static int WIDTH = 240;
+static int HEIGHT = 135;
 
 // Credentials are now in secrets.h
 
@@ -146,8 +147,8 @@ String transcribeAudio() {
   client.setInsecure();
   client.setTimeout(60);
 
-  Serial.println("Connecting to api.openai.com...");
-  if (!client.connect("api.openai.com", 443)) {
+  Serial.printf("Connecting to %s:%d...\n", STT_HOST, STT_PORT);
+  if (!client.connect(STT_HOST, STT_PORT)) {
     Serial.println("ERROR: Connection failed!");
     return "Connection failed";
   }
@@ -166,7 +167,7 @@ String transcribeAudio() {
 
   String bodyEnd = "\r\n--" + boundary + "\r\n";
   bodyEnd += "Content-Disposition: form-data; name=\"model\"\r\n\r\n";
-  bodyEnd += "whisper-1\r\n";
+  bodyEnd += String(STT_MODEL) + "\r\n";
   bodyEnd += "--" + boundary + "--\r\n";
 
   int contentLength =
@@ -175,9 +176,9 @@ String transcribeAudio() {
                 audioDataSize);
 
   Serial.println("Sending request headers...");
-  client.print("POST /v1/audio/transcriptions HTTP/1.1\r\n");
-  client.print("Host: api.openai.com\r\n");
-  client.print("Authorization: Bearer " + String(OPENAI_API_KEY) + "\r\n");
+  client.print(String("POST ") + STT_PATH + " HTTP/1.1\r\n");
+  client.print(String("Host: ") + STT_HOST + "\r\n");
+  client.print("Authorization: Bearer " + String(API_KEY) + "\r\n");
   client.print("Content-Type: multipart/form-data; boundary=" + boundary +
                "\r\n");
   client.print("Content-Length: " + String(contentLength) + "\r\n");
@@ -283,17 +284,17 @@ String transcribeAudio() {
 }
 
 String askGPT(const String &question) {
-  Serial.println("\n========== ASKING GPT ==========");
+  Serial.println("\n========== ASKING LLM ==========");
   Serial.println("Question: " + question);
 
   HTTPClient http;
   WiFiClientSecure client;
   client.setInsecure();
 
-  Serial.println("Connecting to OpenAI...");
-  http.begin(client, "https://api.openai.com/v1/responses");
+  Serial.printf("Connecting to LLM at %s...\n", LLM_URL);
+  http.begin(client, LLM_URL);
   http.addHeader("Content-Type", "application/json");
-  http.addHeader("Authorization", String("Bearer ") + OPENAI_API_KEY);
+  http.addHeader("Authorization", String("Bearer ") + API_KEY);
   http.setTimeout(90000);
 
   String escaped = question;
@@ -301,22 +302,39 @@ String askGPT(const String &question) {
   escaped.replace("\"", "\\\"");
   escaped.replace("\n", " ");
 
-  String body = "{"
-                "\"model\":\"gpt-4o-mini\","
-                "\"input\":["
-                "{"
-                "\"role\":\"user\","
-                "\"content\":["
-                "{"
-                "\"type\":\"input_text\","
-                "\"text\":\"" +
-                escaped +
-                " Answer in 20 words or less.\""
-                "}"
-                "]"
-                "}"
-                "]"
-                "}";
+  String body;
+  if (LLM_USE_RESPONSES_API) {
+    // OpenAI Responses API format
+    body = "{"
+           "\"model\":\"" + String(LLM_MODEL) + "\","
+           "\"input\":["
+           "{"
+           "\"role\":\"user\","
+           "\"content\":["
+           "{"
+           "\"type\":\"input_text\","
+           "\"text\":\"" +
+           escaped +
+           " Answer in 20 words or less.\""
+           "}"
+           "]"
+           "}"
+           "]"
+           "}";
+  } else {
+    // Standard Chat Completions API format (OpenWebUI, etc.)
+    body = "{"
+           "\"model\":\"" + String(LLM_MODEL) + "\","
+           "\"messages\":["
+           "{"
+           "\"role\":\"user\","
+           "\"content\":\"" +
+           escaped +
+           " Answer in 20 words or less.\""
+           "}"
+           "]"
+           "}";
+  }
 
   Serial.println("Sending request...");
   Serial.println("Body: " + body);
@@ -334,47 +352,86 @@ String askGPT(const String &question) {
   String resp = http.getString();
   http.end();
 
-  Serial.println("GPT response:");
+  Serial.println("LLM response:");
   Serial.println(resp);
 
-  int outIdx = resp.indexOf("output_text");
-  if (outIdx < 0) {
-    Serial.println("ERROR: No 'output_text' in response!");
-    return "No output";
-  }
-
-  int textKey = resp.indexOf("\"text\"", outIdx);
-  if (textKey < 0) {
-    Serial.println("ERROR: No 'text' field!");
-    return "No text";
-  }
-
-  int start = resp.indexOf('"', textKey + 6);
-  if (start < 0) {
-    Serial.println("ERROR: Parse error!");
-    return "Parse error";
-  }
-  start++;
-
   String result;
-  bool esc = false;
-  for (unsigned int i = start; i < resp.length(); i++) {
-    char c = resp[i];
-    if (esc) {
-      if (c == 'n')
-        result += '\n';
-      else if (c == 'u') {
-        i += 4;
-        result += '-';
-      } else
+  
+  if (LLM_USE_RESPONSES_API) {
+    // Parse OpenAI Responses API format
+    int outIdx = resp.indexOf("output_text");
+    if (outIdx < 0) {
+      Serial.println("ERROR: No 'output_text' in response!");
+      return "No output";
+    }
+
+    int textKey = resp.indexOf("\"text\"", outIdx);
+    if (textKey < 0) {
+      Serial.println("ERROR: No 'text' field!");
+      return "No text";
+    }
+
+    int start = resp.indexOf('"', textKey + 6);
+    if (start < 0) {
+      Serial.println("ERROR: Parse error!");
+      return "Parse error";
+    }
+    start++;
+
+    bool esc = false;
+    for (unsigned int i = start; i < resp.length(); i++) {
+      char c = resp[i];
+      if (esc) {
+        if (c == 'n')
+          result += '\n';
+        else if (c == 'u') {
+          i += 4;
+          result += '-';
+        } else
+          result += c;
+        esc = false;
+      } else if (c == '\\') {
+        esc = true;
+      } else if (c == '"') {
+        break;
+      } else {
         result += c;
-      esc = false;
-    } else if (c == '\\') {
-      esc = true;
-    } else if (c == '"') {
-      break;
-    } else {
-      result += c;
+      }
+    }
+  } else {
+    // Parse standard Chat Completions API format
+    int contentIdx = resp.indexOf("\"content\"");
+    if (contentIdx < 0) {
+      Serial.println("ERROR: No 'content' in response!");
+      return "No content";
+    }
+
+    int start = resp.indexOf('"', contentIdx + 9);
+    if (start < 0) {
+      Serial.println("ERROR: Parse error!");
+      return "Parse error";
+    }
+    start++;
+
+    bool esc = false;
+    for (unsigned int i = start; i < resp.length(); i++) {
+      char c = resp[i];
+      if (esc) {
+        if (c == 'n')
+          result += '\n';
+        else if (c == 'u') {
+          i += 4;
+          result += '-';
+        } else
+          result += c;
+        esc = false;
+      } else if (c == '\\') {
+        esc = true;
+      } else if (c == '"') {
+        break;
+      } else {
+        result += c;
+      }
     }
   }
 
@@ -422,12 +479,17 @@ void setup() {
   delay(1000);
 
   Serial.println("\n\n========================================");
-  Serial.println("       M5StickC Plus Voice Assistant");
+  Serial.println("         M5 Voice Assistant");
   Serial.println("========================================\n");
 
   auto cfg = M5.config();
   M5.begin(cfg);
   M5.Display.setRotation(1);
+
+  // Get actual display dimensions (works for StickC Plus 2, Core 2, etc.)
+  WIDTH = M5.Display.width();
+  HEIGHT = M5.Display.height();
+  Serial.printf("Display: %dx%d\n", WIDTH, HEIGHT);
 
   drawScreen("Connecting...");
 
@@ -463,6 +525,7 @@ void setup() {
   }
   Serial.println("Audio buffer allocated");
 
+  // Show appropriate prompt based on device capabilities
   drawScreen("Press A\nto ask a question");
   Serial.println("\nReady! Press button A to ask a question.\n");
 }
@@ -470,8 +533,9 @@ void setup() {
 void loop() {
   M5.update();
 
+  // Trigger on button A (works on both StickC and Core 2 touch buttons)
   if (M5.BtnA.wasClicked()) {
-    Serial.println("\n*** BUTTON A PRESSED ***\n");
+    Serial.println("\n*** TRIGGERED ***\n");
     Serial.printf("Free heap before recording: %d bytes\n", ESP.getFreeHeap());
 
     if (!recordAudio()) {
@@ -499,13 +563,21 @@ void loop() {
     drawScreen("Thinking...");
     String answer = askGPT(question);
 
-    response = wordWrap(answer, 25);
+    // Adjust wrap width based on screen size (Core 2 is wider)
+    int wrapChars = (WIDTH >= 320) ? 35 : 25;
+    response = wordWrap(answer, wrapChars);
     Serial.println("Final display text:");
     Serial.println(response);
     drawScreen(response);
 
     Serial.printf("Free heap at end: %d bytes\n", ESP.getFreeHeap());
     Serial.println("\n*** INTERACTION COMPLETE ***\n");
+  }
+
+  // Button B returns to home screen
+  if (M5.BtnB.wasClicked()) {
+    Serial.println("Button B pressed - returning to home screen");
+    drawScreen("Press A\nto ask a question");
   }
 
   delay(20);
