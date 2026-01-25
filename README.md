@@ -6,9 +6,10 @@ Transform your M5StickCPlus2 into an intelligent voice assistant with OpenWebUI 
 
 ### 🎙️ Voice Interaction
 - **Audio Recording:** Press Button A to record your question
+- **Voice Activity Detection (VAD):** Auto-stops recording after 1.5s of silence
+- **Real-time Audio Level:** Visual feedback with color-coded level meter
 - **Speech-to-Text:** Automatic transcription using OpenAI Whisper API
 - **AI Response:** Get answers from your configured LLM model
-- **Visual Feedback:** Real-time status updates on device display
 
 ### 💬 OpenWebUI Integration
 
@@ -37,7 +38,12 @@ This allows you to create domain-specific assistants in OpenWebUI (e.g., a techn
 
 ## Hardware Requirements
 
-- M5StickCPlus2 with PDM microphone
+**Supported Devices:**
+- M5StickC Plus2 (240x135 display)
+- M5Stack Core2 (320x240 display)
+- M5Stack CoreS3 (320x240 display)
+
+**Also needed:**
 - WiFi connection
 - USB-C cable for programming
 
@@ -103,7 +109,8 @@ arduino-cli upload -p [PORT] --fqbn m5stack:esp32:m5stick_c_plus2
 ### Button Controls
 
 - **Button A:** Record and ask a question
-- **Button B:** Start a new chat session (clears conversation history)
+- **Button B (click):** Start a new chat session (clears conversation history)
+- **Button B (hold 2s):** Toggle audio quality profile
 
 ### Conversation Features
 
@@ -125,35 +132,43 @@ User msg (parentId: null)
       └─ Assistant msg (parentId: user_id)
 ```
 
-## Audio Configuration & Memory Constraints
+## Audio Configuration & Device Profiles
 
-The M5StickCPlus2 (ESP32) has limited RAM available for the audio buffer. The memory usage is calculated as:
-`Buffer Size = SAMPLE_RATE * RECORD_SECONDS * 2 bytes`
+The firmware automatically detects your device type and provides appropriate audio profiles.
 
-We have approximately **100KB - 120KB** of safe, contiguous heap available for audio.
+### Device-Specific Profiles
 
-### Tested Configurations
+**M5StickC Plus2** (240x135 display, ~120KB safe RAM):
 
-| Configuration | Sample Rate | Duration | Buffer Size | Quality | Notes |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **High Quality** | 16000 Hz | 3 Seconds | ~96 KB | Excellent | Best for short questions. Clearer transcription. |
-| **Long Duration** | 8000 Hz | 5 Seconds | ~80 KB | Good | **Current Default.** Better for longer questions. "Telephone quality". |
+| Profile | Sample Rate | Duration | Buffer | Use Case |
+| :--- | :--- | :--- | :--- | :--- |
+| **Standard** | 8 kHz | 5s | 80 KB | Default, balanced |
+| **HQ Short** | 16 kHz | 3s | 96 KB | High quality, quick questions |
 
-### How to Adjust
+**Core2 / CoreS3** (320x240 display, ~300KB+ safe RAM):
 
-To change the configuration, edit the top of `m5stickcplus2-openai-answers.ino`:
+| Profile | Sample Rate | Duration | Buffer | Use Case |
+| :--- | :--- | :--- | :--- | :--- |
+| **Standard** | 8 kHz | 8s | 128 KB | Default, balanced |
+| **Long** | 8 kHz | 15s | 240 KB | Extended recording |
+| **HQ Short** | 16 kHz | 5s | 160 KB | High quality |
 
+### Switching Profiles
+
+**Hold Button B for 2 seconds** to cycle through available profiles. The display will show the new profile settings.
+
+### Device-Specific Response Length
+
+The system prompt automatically adjusts based on screen size:
+- **M5StickC Plus2:** 20 words max (fits small screen)
+- **Core2/CoreS3:** 50 words max (larger screen)
+
+Configure the base prompt and word limits in `secrets.h`:
 ```cpp
-// For High Quality (3 seconds):
-static const int SAMPLE_RATE = 16000;
-static const int RECORD_SECONDS = 3;
-
-// For Long Duration (5 seconds):
-static const int SAMPLE_RATE = 8000;
-static const int RECORD_SECONDS = 5;
+const char *LLM_SYSTEM_PROMPT_BASE = " Answer";  // Base prompt
+const int LLM_MAX_WORDS_SMALL = 20;   // StickC Plus2
+const int LLM_MAX_WORDS_LARGE = 50;   // Core2/CoreS3
 ```
-
-> **Warning:** If you increase both (e.g., 16000Hz for 5 seconds), the device will run out of memory (`Mem Error`) and crash/reboot.
 
 ## Architecture
 
@@ -225,8 +240,8 @@ Contributions welcome! Areas for improvement:
 - Additional audio codecs
 - Alternative LLM backends
 - Enhanced display UI
-- Voice activity detection
 - Wake word support
+- Text-to-speech responses
 
 ## License
 
