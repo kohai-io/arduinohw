@@ -9,6 +9,7 @@ Transform your M5StickCPlus2 into an intelligent voice assistant with OpenWebUI 
 - **Voice Activity Detection (VAD):** Auto-stops recording after 1.5s of silence
 - **Real-time Audio Level:** Visual feedback with color-coded level meter
 - **Speech-to-Text:** Transcription via OpenAI Whisper or OpenWebUI STT
+- **Text-to-Speech:** Spoken responses on Core2/CoreS3 (devices with speakers)
 - **AI Response:** Get answers from your configured LLM model
 
 ### 💬 OpenWebUI Integration
@@ -86,6 +87,12 @@ Required Arduino libraries:
 - ArduinoJson
 - HTTPClient
 - WiFiClientSecure
+- **arduino-libhelix** (for TTS on Core2/CoreS3)
+
+**Installing arduino-libhelix:**
+1. Download the latest release ZIP from [arduino-libhelix releases](https://github.com/pschatzmann/arduino-libhelix/releases)
+2. In Arduino IDE: **Sketch → Include Library → Add .ZIP Library**
+3. Select the downloaded ZIP file
 
 ### 3. Upload Firmware
 
@@ -116,6 +123,7 @@ arduino-cli upload -p [PORT] --fqbn m5stack:esp32:m5stick_c_plus2
 - **Button A:** Record and ask a question
 - **Button B (click):** Start a new chat session (clears conversation history)
 - **Button B (hold 2s):** Toggle audio quality profile
+- **Button C:** Replay last TTS response (Core2/CoreS3 only)
 
 ### Conversation Features
 
@@ -175,6 +183,33 @@ const int LLM_MAX_WORDS_SMALL = 20;   // StickC Plus2
 const int LLM_MAX_WORDS_LARGE = 50;   // Core2/CoreS3
 ```
 
+## Text-to-Speech (Core2/CoreS3 Only)
+
+Devices with speakers (Core2, CoreS3) can speak responses aloud using OpenWebUI's TTS endpoint.
+
+### TTS Configuration
+
+```cpp
+const bool USE_TTS = true;            // Enable spoken responses
+const char *TTS_MODEL = "tts-1";      // tts-1 or tts-1-hd
+const char *TTS_VOICE = "alloy";      // alloy, echo, fable, onyx, nova, shimmer
+```
+
+### Available Voices
+
+| Voice | Description |
+| :--- | :--- |
+| **alloy** | Neutral, balanced |
+| **echo** | Warm, conversational |
+| **fable** | Expressive, storytelling |
+| **onyx** | Deep, authoritative |
+| **nova** | Friendly, upbeat |
+| **shimmer** | Soft, gentle |
+
+### Replay Feature
+
+Press **Button C** to replay the last spoken response.
+
 ## Architecture
 
 ### Message Flow
@@ -189,12 +224,14 @@ const int LLM_MAX_WORDS_LARGE = 50;   // Core2/CoreS3
 7. Poll chat history for assistant response
 8. Save complete chat history with threading
 9. Display response on screen
+10. Speak response via TTS (Core2/CoreS3 only)
 ```
 
 ### OpenWebUI API Integration
 
 **Endpoints used:**
 - `POST /api/v1/audio/transcriptions` - Speech-to-text (when USE_OWUI_STT = true)
+- `POST /api/v1/audio/speech` - Text-to-speech (Core2/CoreS3 only)
 - `POST /api/v1/chats/new` - Create new chat session
 - `GET /api/v1/chats/{id}` - Fetch chat history
 - `POST /api/v1/chats/{id}` - Update chat with messages
