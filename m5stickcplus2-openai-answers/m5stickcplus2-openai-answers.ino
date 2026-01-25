@@ -5,6 +5,10 @@
 #include <WiFiClientSecure.h>
 #include <time.h>
 
+// MP3 decoding for TTS (Core2/CoreS3 only) - uses arduino-libhelix
+#include <MP3DecoderHelix.h>
+using namespace libhelix;
+
 // Display dimensions - set dynamically in setup()
 static int WIDTH = 240;
 static int HEIGHT = 135;
@@ -99,6 +103,208 @@ void nextAudioProfile() {
 // Get current profile name
 const char* getCurrentProfileName() {
   return deviceProfiles[currentProfileIndex].name;
+}
+
+// TTS audio output buffer and state (kept for replay)
+static int16_t* ttsOutputBuffer = nullptr;
+static size_t ttsOutputSize = 0;
+static size_t ttsOutputIndex = 0;
+static int ttsSampleRate = 44100;
+static int ttsChannels = 2;
+
+// Last played TTS for replay on button C
+static int16_t* lastTtsBuffer = nullptr;
+static size_t lastTtsLength = 0;
+static int lastTtsSampleRate = 44100;
+static int lastTtsChannels = 1;
+
+// Callback for libhelix MP3 decoder - receives decoded PCM samples
+void ttsAudioCallback(MP3FrameInfo &info, short *pwm_buffer, size_t len, void *ref) {
+  ttsSampleRate = info.samprate;
+  ttsChannels = info.nChans;
+  
+  // Ensure we have enough buffer space
+  size_t newSize = ttsOutputIndex + len;
+  if (newSize > ttsOutputSize) {
+    size_t allocSize = newSize + 8192; // Extra space for more frames
+    int16_t* newBuffer = (int16_t*)realloc(ttsOutputBuffer, allocSize * sizeof(int16_t));
+    if (newBuffer) {
+      ttsOutputBuffer = newBuffer;
+      ttsOutputSize = allocSize;
+    } else {
+      Serial.println("ERROR: Failed to realloc TTS buffer");
+      return;
+    }
+  }
+  
+  // Copy decoded samples to output buffer
+  memcpy(ttsOutputBuffer + ttsOutputIndex, pwm_buffer, len * sizeof(int16_t));
+  ttsOutputIndex += len;
+}
+
+// Text-to-Speech - speak the response on Core2/CoreS3
+void speakText(const String &text) {
+  if (!USE_TTS || !isLargeDevice) {
+    Serial.println("TTS disabled or not a large device");
+    return;
+  }
+  
+  Serial.println("\n========== TEXT-TO-SPEECH ==========");
+  Serial.printf("Speaking: %s\n", text.c_str());
+  
+  HTTPClient http;
+  WiFiClientSecure client;
+  client.setInsecure();
+  
+  String ttsUrl = String(OWUI_BASE_URL) + "/api/v1/audio/speech";
+  Serial.printf("TTS URL: %s\n", ttsUrl.c_str());
+  
+  http.begin(client, ttsUrl);
+  http.addHeader("Authorization", String("Bearer ") + LLM_API_KEY);
+  http.addHeader("Content-Type", "application/json");
+  http.setTimeout(30000);
+  
+  // Build JSON request - OpenWebUI always returns MP3 regardless of format
+  String body = "{\"model\":\"" + String(TTS_MODEL) + "\","
+                "\"input\":\"" + text + "\","
+                "\"voice\":\"" + String(TTS_VOICE) + "\"}";
+  
+  Serial.println("Requesting TTS...");
+  int httpCode = http.POST(body);
+  Serial.printf("HTTP response code: %d\n", httpCode);
+  
+  if (httpCode == 200) {
+    int contentLength = http.getSize();
+    Serial.printf("MP3 size: %d bytes\n", contentLength);
+    
+    if (contentLength > 0 && contentLength < 500000) {
+      // Allocate buffer for MP3 data
+      uint8_t* mp3Data = (uint8_t*)malloc(contentLength);
+      if (mp3Data) {
+        WiFiClient* stream = http.getStreamPtr();
+        int bytesRead = 0;
+        
+        while (bytesRead < contentLength && stream->connected()) {
+          if (stream->available()) {
+            int toRead = min((int)stream->available(), contentLength - bytesRead);
+            int read = stream->readBytes(mp3Data + bytesRead, toRead);
+            bytesRead += read;
+          }
+          delay(1);
+        }
+        
+        Serial.printf("Downloaded %d bytes of MP3\n", bytesRead);
+        http.end();
+        
+        // Reset output buffer
+        ttsOutputIndex = 0;
+        ttsSampleRate = 44100;
+        ttsChannels = 2;
+        
+        // Create MP3 decoder
+        MP3DecoderHelix mp3Decoder;
+        mp3Decoder.setDataCallback(ttsAudioCallback);
+        mp3Decoder.begin();
+        
+        Serial.println("Decoding MP3...");
+        mp3Decoder.write(mp3Data, bytesRead);
+        mp3Decoder.end();
+        
+        free(mp3Data);
+        
+        Serial.printf("Decoded %d samples at %dHz\n", ttsOutputIndex, ttsSampleRate);
+        
+        if (ttsOutputIndex > 0 && ttsOutputBuffer) {
+          // Reinitialize speaker for each playback
+          M5.Speaker.end();
+          delay(50);
+          M5.Speaker.begin();
+          M5.Speaker.setVolume(200);
+          
+          Serial.printf("Playing audio... (%d channels, %d samples)\n", ttsChannels, ttsOutputIndex);
+          // stereo parameter tells M5 if data is interleaved stereo
+          bool isStereo = (ttsChannels == 2);
+          
+          // Play audio - use channel 0
+          bool playResult = M5.Speaker.playRaw(ttsOutputBuffer, ttsOutputIndex, ttsSampleRate, isStereo, 1, 0);
+          Serial.printf("playRaw returned: %d, isPlaying: %d\n", playResult, M5.Speaker.isPlaying());
+          
+          // Wait for playback to complete
+          delay(100); // Give speaker time to start
+          int waitCount = 0;
+          while (M5.Speaker.isPlaying() && waitCount < 3000) { // Max 30 sec wait
+            delay(10);
+            waitCount++;
+          }
+          delay(100); // Extra delay to ensure buffer is fully consumed
+          
+          Serial.printf("TTS playback complete (waited %dms)\n", waitCount * 10);
+          
+          // Release speaker
+          M5.Speaker.end();
+          
+          // Save buffer for replay (free previous if exists)
+          if (lastTtsBuffer) {
+            free(lastTtsBuffer);
+          }
+          lastTtsBuffer = ttsOutputBuffer;
+          lastTtsLength = ttsOutputIndex;
+          lastTtsSampleRate = ttsSampleRate;
+          lastTtsChannels = ttsChannels;
+          
+          // Reset working buffer pointers (don't free - now owned by lastTts)
+          ttsOutputBuffer = nullptr;
+          ttsOutputSize = 0;
+          ttsOutputIndex = 0;
+        } else {
+          Serial.println("ERROR: No decoded audio to play");
+        }
+      } else {
+        Serial.println("ERROR: Failed to allocate MP3 buffer");
+        http.end();
+      }
+    } else {
+      Serial.printf("ERROR: Invalid content length: %d\n", contentLength);
+      http.end();
+    }
+  } else {
+    Serial.println("ERROR: TTS request failed");
+    Serial.println(http.getString());
+    http.end();
+  }
+  
+  Serial.println("=====================================\n");
+}
+
+// Replay last TTS audio (called on button C press)
+void replayTts() {
+  if (!lastTtsBuffer || lastTtsLength == 0) {
+    Serial.println("No TTS audio to replay");
+    return;
+  }
+  
+  Serial.println("\n========== REPLAY TTS ==========");
+  Serial.printf("Replaying %d samples at %dHz (%d channels)\n", lastTtsLength, lastTtsSampleRate, lastTtsChannels);
+  
+  // Initialize speaker
+  M5.Speaker.end();
+  delay(50);
+  M5.Speaker.begin();
+  M5.Speaker.setVolume(200);
+  
+  bool isStereo = (lastTtsChannels == 2);
+  M5.Speaker.playRaw(lastTtsBuffer, lastTtsLength, lastTtsSampleRate, isStereo, 1, 0);
+  
+  // Wait for playback
+  delay(100);
+  while (M5.Speaker.isPlaying()) {
+    delay(10);
+  }
+  delay(100);
+  
+  M5.Speaker.end();
+  Serial.println("Replay complete");
+  Serial.println("=================================\n");
 }
 
 // Real-time audio display
@@ -1423,8 +1629,21 @@ String askGPT(const String &question) {
         if (msgIdx >= 0) {
           Serial.printf("Found assistant message after %d polls\n", pollAttempt);
           
-          // Find the content field after this message ID
+          // In OpenWebUI JSON, structure is: "role":"assistant",...,"content":"...",...,"id":"xxx"
+          // So we need to search BACKWARDS from msgIdx for role, or find content after msgIdx
+          // Simpler: just find content after the ID
           int contentIdx = chatData.indexOf("\"content\"", msgIdx);
+          if (contentIdx < 0) {
+            // Content might be before ID in the JSON object, search backwards
+            // Look for content in the 500 chars before msgIdx
+            int searchStart = (msgIdx > 500) ? msgIdx - 500 : 0;
+            String searchBlock = chatData.substring(searchStart, msgIdx);
+            int relContentIdx = searchBlock.lastIndexOf("\"content\"");
+            if (relContentIdx >= 0) {
+              contentIdx = searchStart + relContentIdx;
+            }
+          }
+          
           if (contentIdx >= 0) {
             int start = chatData.indexOf('"', contentIdx + 9);
             if (start >= 0) {
@@ -1446,11 +1665,31 @@ String askGPT(const String &question) {
                 }
               }
             }
-          }
-          
-          if (result.length() > 0) {
-            Serial.printf("Retrieved response length: %d\n", result.length());
-            break;
+            
+            if (result.length() > 0) {
+              Serial.printf("Retrieved response length: %d\n", result.length());
+              Serial.printf("First 50 chars: %.50s\n", result.c_str());
+              
+              // Check if this is an echo of the user's question (without system prompt suffix)
+              // Extract just the question part (before " Answer in")
+              String questionOnly = question;
+              int answerIdx = question.indexOf(" Answer in");
+              if (answerIdx > 0) {
+                questionOnly = question.substring(0, answerIdx);
+              }
+              
+              if (result == questionOnly || result == question) {
+                Serial.println("WARNING: Got echo of question, waiting for real response...");
+                result = "";
+                // Keep polling
+              } else {
+                break;
+              }
+            } else {
+              Serial.println("Content empty, waiting...");
+            }
+          } else {
+            Serial.println("Content field not found near message ID");
           }
         } else {
           Serial.println("Assistant message not ready yet...");
@@ -1733,6 +1972,11 @@ void loop() {
     Serial.println(response);
     drawScreen(response);
 
+    // Speak the response on Core2/CoreS3 (devices with speakers)
+    if (USE_TTS && isLargeDevice) {
+      speakText(answer);
+    }
+
     Serial.printf("Free heap at end: %d bytes\n", ESP.getFreeHeap());
     Serial.println("\n*** INTERACTION COMPLETE ***\n");
   }
@@ -1767,18 +2011,16 @@ void loop() {
     if (!btnBHeld && (millis() - btnBPressTime < 2000)) {
       // Short click - new chat session
       Serial.println("Button B clicked - starting new chat session");
-      
-      if (USE_OWUI_SESSIONS) {
-        currentChatId = "";
-        currentSessionId = "";
-        Serial.println("Chat session cleared - next interaction will create new chat");
-        drawScreen("New Chat\nStarted");
-        delay(1500);
-      }
-      
-      drawScreen("Press A\nto ask a question");
+      currentChatId = "";
+      drawScreen("New chat\nPress A to ask");
     }
     btnBHeld = false;
+  }
+
+  // Button C: Replay last TTS audio (Core2/CoreS3 only)
+  if (isLargeDevice && USE_TTS && M5.BtnC.wasPressed()) {
+    Serial.println("Button C pressed - replaying TTS");
+    replayTts();
   }
 
   delay(20);

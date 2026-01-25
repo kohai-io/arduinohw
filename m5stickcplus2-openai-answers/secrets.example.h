@@ -50,6 +50,13 @@ const int LLM_MAX_WORDS_LARGE = 50;   // For Core2/CoreS3 (larger screen)
 const bool USE_OWUI_SESSIONS = true;  // Enable for OpenWebUI chat history
 const char *OWUI_BASE_URL = "http://your-openwebui-host:8080";  // Base URL for OpenWebUI
 
+// Text-to-Speech (TTS) - Core2/CoreS3 only (devices with speakers)
+// Uses OWUI_BASE_URL + "/api/v1/audio/speech" with LLM_API_KEY
+// Requires ESP8266Audio library for MP3 decoding
+const bool USE_TTS = true;            // Enable spoken responses on large devices
+const char *TTS_MODEL = "tts-1";      // tts-1 or tts-1-hd
+const char *TTS_VOICE = "alloy";      // alloy, echo, fable, onyx, nova, shimmer
+
 // NTP Time Servers (for accurate Unix timestamps)
 const char *NTP_SERVER_1 = "pool.ntp.org";
 const char *NTP_SERVER_2 = "time.nist.gov";
