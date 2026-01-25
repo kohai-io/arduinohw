@@ -445,111 +445,177 @@ void createWavHeader(uint8_t *header, int dataSize) {
 String transcribeAudio() {
   Serial.println("\n========== TRANSCRIBING ==========");
 
-  WiFiClientSecure client;
-  client.setInsecure();
-  client.setTimeout(60);
-
-  Serial.printf("Connecting to %s:%d...\n", STT_HOST, STT_PORT);
-  if (!client.connect(STT_HOST, STT_PORT)) {
-    Serial.println("ERROR: Connection failed!");
-    return "Connection failed";
-  }
-  Serial.println("Connected");
-
   int audioDataSize = actualRecordedSamples * sizeof(int16_t);
   uint8_t wavHeader[44];
   createWavHeader(wavHeader, audioDataSize);
 
   String boundary = "----ESP32Boundary";
+  String response;
 
-  String bodyStart = "--" + boundary + "\r\n";
-  bodyStart += "Content-Disposition: form-data; name=\"file\"; "
-               "filename=\"audio.wav\"\r\n";
-  bodyStart += "Content-Type: audio/wav\r\n\r\n";
+  if (USE_OWUI_STT) {
+    // Use OpenWebUI's transcription endpoint via HTTPClient
+    Serial.println("Using OpenWebUI STT endpoint");
+    
+    HTTPClient http;
+    WiFiClientSecure client;
+    client.setInsecure();
+    
+    String sttUrl = String(OWUI_BASE_URL) + "/api/v1/audio/transcriptions";
+    Serial.printf("STT URL: %s\n", sttUrl.c_str());
+    
+    http.begin(client, sttUrl);
+    http.addHeader("Authorization", String("Bearer ") + LLM_API_KEY);
+    http.setTimeout(60000);
+    
+    // Build multipart body - OpenWebUI uses "file" and optional "language"
+    String bodyStart = "--" + boundary + "\r\n";
+    bodyStart += "Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n";
+    bodyStart += "Content-Type: audio/wav\r\n\r\n";
+    
+    String bodyEnd = "\r\n--" + boundary + "--\r\n";
+    
+    int contentLength = bodyStart.length() + 44 + audioDataSize + bodyEnd.length();
+    Serial.printf("Content length: %d bytes (audio: %d bytes)\n", contentLength, audioDataSize);
+    
+    // Create full body buffer
+    uint8_t* fullBody = (uint8_t*)malloc(contentLength);
+    if (!fullBody) {
+      Serial.println("ERROR: Failed to allocate body buffer");
+      return "Memory error";
+    }
+    
+    int offset = 0;
+    memcpy(fullBody + offset, bodyStart.c_str(), bodyStart.length());
+    offset += bodyStart.length();
+    memcpy(fullBody + offset, wavHeader, 44);
+    offset += 44;
+    memcpy(fullBody + offset, audioBuffer, audioDataSize);
+    offset += audioDataSize;
+    memcpy(fullBody + offset, bodyEnd.c_str(), bodyEnd.length());
+    
+    http.addHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
+    
+    Serial.println("Sending audio to OpenWebUI...");
+    int httpCode = http.POST(fullBody, contentLength);
+    free(fullBody);
+    
+    Serial.printf("HTTP response code: %d\n", httpCode);
+    
+    if (httpCode == 200) {
+      response = http.getString();
+    } else {
+      Serial.println("ERROR: STT request failed");
+      Serial.println(http.getString());
+      http.end();
+      return "STT failed";
+    }
+    http.end();
+    
+  } else {
+    // Use OpenAI Whisper endpoint via raw socket (original implementation)
+    Serial.println("Using OpenAI Whisper endpoint");
+    
+    WiFiClientSecure client;
+    client.setInsecure();
+    client.setTimeout(60);
 
-  String bodyEnd = "\r\n--" + boundary + "\r\n";
-  bodyEnd += "Content-Disposition: form-data; name=\"model\"\r\n\r\n";
-  bodyEnd += String(STT_MODEL) + "\r\n";
-  bodyEnd += "--" + boundary + "--\r\n";
+    Serial.printf("Connecting to %s:%d...\n", STT_HOST, STT_PORT);
+    if (!client.connect(STT_HOST, STT_PORT)) {
+      Serial.println("ERROR: Connection failed!");
+      return "Connection failed";
+    }
+    Serial.println("Connected");
 
-  int contentLength =
-      bodyStart.length() + 44 + audioDataSize + bodyEnd.length();
-  Serial.printf("Content length: %d bytes (audio: %d bytes)\n", contentLength,
-                audioDataSize);
+    String bodyStart = "--" + boundary + "\r\n";
+    bodyStart += "Content-Disposition: form-data; name=\"file\"; "
+                 "filename=\"audio.wav\"\r\n";
+    bodyStart += "Content-Type: audio/wav\r\n\r\n";
 
-  Serial.println("Sending request headers...");
-  client.print(String("POST ") + STT_PATH + " HTTP/1.1\r\n");
-  client.print(String("Host: ") + STT_HOST + "\r\n");
-  client.print("Authorization: Bearer " + String(STT_API_KEY) + "\r\n");
-  client.print("Content-Type: multipart/form-data; boundary=" + boundary +
-               "\r\n");
-  client.print("Content-Length: " + String(contentLength) + "\r\n");
-  client.print("Connection: close\r\n\r\n");
+    String bodyEnd = "\r\n--" + boundary + "\r\n";
+    bodyEnd += "Content-Disposition: form-data; name=\"model\"\r\n\r\n";
+    bodyEnd += String(STT_MODEL) + "\r\n";
+    bodyEnd += "--" + boundary + "--\r\n";
 
-  Serial.println("Sending audio data...");
-  client.print(bodyStart);
-  client.write(wavHeader, 44);
+    int contentLength =
+        bodyStart.length() + 44 + audioDataSize + bodyEnd.length();
+    Serial.printf("Content length: %d bytes (audio: %d bytes)\n", contentLength,
+                  audioDataSize);
 
-  // Send in chunks to avoid watchdog and network buffer issues
-  int chunkSize = 1024;
-  uint8_t *ptr = (uint8_t *)audioBuffer;
-  int remaining = audioDataSize;
-  int sent = 0;
+    Serial.println("Sending request headers...");
+    client.print(String("POST ") + STT_PATH + " HTTP/1.1\r\n");
+    client.print(String("Host: ") + STT_HOST + "\r\n");
+    client.print("Authorization: Bearer " + String(STT_API_KEY) + "\r\n");
+    client.print("Content-Type: multipart/form-data; boundary=" + boundary +
+                 "\r\n");
+    client.print("Content-Length: " + String(contentLength) + "\r\n");
+    client.print("Connection: close\r\n\r\n");
 
-  while (remaining > 0) {
-    if (!client.connected()) {
-      Serial.println("ERROR: Connection lost during upload");
-      return "Connection lost";
+    Serial.println("Sending audio data...");
+    client.print(bodyStart);
+    client.write(wavHeader, 44);
+
+    // Send in chunks to avoid watchdog and network buffer issues
+    int chunkSize = 1024;
+    uint8_t *ptr = (uint8_t *)audioBuffer;
+    int remaining = audioDataSize;
+    int sent = 0;
+
+    while (remaining > 0) {
+      if (!client.connected()) {
+        Serial.println("ERROR: Connection lost during upload");
+        return "Connection lost";
+      }
+
+      int toSend = min(chunkSize, remaining);
+      int written = client.write(ptr, toSend);
+
+      if (written == 0) {
+        Serial.println("WARNING: 0 bytes written, retrying...");
+        delay(100);
+        if (!client.connected())
+          break;
+        continue;
+      }
+
+      ptr += written;
+      remaining -= written;
+      sent += written;
+
+      if (sent % 8192 == 0) {
+        Serial.printf("  Sent %d / %d bytes\n", sent, audioDataSize);
+      }
+      delay(2); // Small delay to let network stack process
     }
 
-    int toSend = min(chunkSize, remaining);
-    int written = client.write(ptr, toSend);
+    client.print(bodyEnd);
+    Serial.println("Request sent, waiting for response...");
 
-    if (written == 0) {
-      Serial.println("WARNING: 0 bytes written, retrying...");
+    unsigned long timeout = millis();
+    while (!client.available()) {
+      if (millis() - timeout > 60000) {
+        Serial.println("ERROR: Timeout waiting for response!");
+        client.stop();
+        return "Timeout";
+      }
       delay(100);
-      if (!client.connected())
+    }
+
+    Serial.println("Response received, reading headers...");
+    while (client.connected()) {
+      String line = client.readStringUntil('\n');
+      Serial.println("  " + line);
+      if (line == "\r")
         break;
-      continue;
     }
 
-    ptr += written;
-    remaining -= written;
-    sent += written;
-
-    if (sent % 8192 == 0) {
-      Serial.printf("  Sent %d / %d bytes\n", sent, audioDataSize);
-    }
-    delay(2); // Small delay to let network stack process
+    response = client.readString();
+    client.stop();
   }
 
-  client.print(bodyEnd);
-  Serial.println("Request sent, waiting for response...");
-
-  unsigned long timeout = millis();
-  while (!client.available()) {
-    if (millis() - timeout > 60000) {
-      Serial.println("ERROR: Timeout waiting for response!");
-      client.stop();
-      return "Timeout";
-    }
-    delay(100);
-  }
-
-  Serial.println("Response received, reading headers...");
-  while (client.connected()) {
-    String line = client.readStringUntil('\n');
-    Serial.println("  " + line);
-    if (line == "\r")
-      break;
-  }
-
-  String response = client.readString();
-  client.stop();
-
-  Serial.println("Whisper response body:");
+  Serial.println("STT response body:");
   Serial.println(response);
 
+  // Parse response - both OpenAI and OpenWebUI return {"text": "..."}
   int textIdx = response.indexOf("\"text\"");
   if (textIdx < 0) {
     Serial.println("ERROR: No 'text' field in response!");
@@ -1339,7 +1405,7 @@ String askGPT(const String &question) {
     
     while (millis() - pollStart < 60000) { // 60 second timeout
       pollAttempt++;
-      delay(2000); // Poll every 2 seconds
+      delay(1000); // Poll every 1 second
       
       Serial.printf("[POLL #%d] Fetching chat history...\n", pollAttempt);
       

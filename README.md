@@ -8,7 +8,7 @@ Transform your M5StickCPlus2 into an intelligent voice assistant with OpenWebUI 
 - **Audio Recording:** Press Button A to record your question
 - **Voice Activity Detection (VAD):** Auto-stops recording after 1.5s of silence
 - **Real-time Audio Level:** Visual feedback with color-coded level meter
-- **Speech-to-Text:** Automatic transcription using OpenAI Whisper API
+- **Speech-to-Text:** Transcription via OpenAI Whisper or OpenWebUI STT
 - **AI Response:** Get answers from your configured LLM model
 
 ### 💬 OpenWebUI Integration
@@ -55,24 +55,29 @@ Copy `secrets.example.h` to `secrets.h` and configure:
 
 ```cpp
 // WiFi Configuration
-#define WIFI_SSID "your-wifi-name"
-#define WIFI_PASS "your-wifi-password"
+const char *WIFI_SSID = "your-wifi-name";
+const char *WIFI_PASS = "your-wifi-password";
 
-// OpenWebUI / LLM Configuration
-#define OWUI_BASE_URL "https://your-openwebui-instance.com"
-#define LLM_API_KEY "your-api-key"
-#define LLM_MODEL "your-model-name"
+// API Keys
+const char *STT_API_KEY = "sk-...";  // For OpenAI Whisper (if USE_OWUI_STT = false)
+const char *LLM_API_KEY = "sk-...";  // For LLM and OpenWebUI
 
-// Optional: Customize system prompt
-#define LLM_SYSTEM_PROMPT " Answer in 20 words or less."
+// OpenWebUI Configuration
+const char *OWUI_BASE_URL = "http://your-openwebui-host:8080";
+const char *LLM_MODEL = "your-model-name";
 
-// Optional: Configure NTP servers
-#define NTP_SERVER_1 "pool.ntp.org"
-#define NTP_SERVER_2 "time.nist.gov"
-
-// Enable OpenWebUI session tracking
-#define USE_OWUI_SESSIONS true
+// API Mode Configuration
+const bool USE_OWUI_STT = true;      // Use OpenWebUI for speech-to-text
+const bool USE_OWUI_SESSIONS = true; // Save chats in OpenWebUI history
 ```
+
+### API Configuration Modes
+
+| Mode | USE_OWUI_STT | USE_OWUI_SESSIONS | Description |
+| :--- | :--- | :--- | :--- |
+| **Full OpenWebUI** | true | true | Both STT and LLM via OpenWebUI |
+| **Mixed** | false | true | OpenAI Whisper + OpenWebUI LLM |
+| **Full OpenAI** | false | false | Both STT and LLM via OpenAI |
 
 ### 2. Install Dependencies
 
@@ -177,7 +182,7 @@ const int LLM_MAX_WORDS_LARGE = 50;   // Core2/CoreS3
 ```
 1. User presses Button A
 2. Record audio via PDM microphone
-3. Transcribe audio → OpenAI Whisper API
+3. Transcribe audio → OpenAI Whisper or OpenWebUI STT
 4. Create/reuse OpenWebUI chat session
 5. Update chat with user message (proper threading)
 6. Send completion request with full conversation history
@@ -189,6 +194,7 @@ const int LLM_MAX_WORDS_LARGE = 50;   // Core2/CoreS3
 ### OpenWebUI API Integration
 
 **Endpoints used:**
+- `POST /api/v1/audio/transcriptions` - Speech-to-text (when USE_OWUI_STT = true)
 - `POST /api/v1/chats/new` - Create new chat session
 - `GET /api/v1/chats/{id}` - Fetch chat history
 - `POST /api/v1/chats/{id}` - Update chat with messages

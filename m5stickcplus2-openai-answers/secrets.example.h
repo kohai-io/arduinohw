@@ -14,12 +14,19 @@ const char *LLM_API_KEY = "sk-proj-YOUR_OPENAI_API_KEY";  // For chat completion
 // For OpenAI:
 //   STT: "api.openai.com" path "/v1/audio/transcriptions"
 //   LLM: "https://api.openai.com/v1/responses"
-// For Mixed (OpenAI STT + OpenWebUI LLM) - RECOMMENDED:
-//   STT: "api.openai.com" with OpenAI key
-//   LLM: "http://your-openwebui-host:8080/api/v1/chat/completions" with JWT token
-//   Note: OpenWebUI doesn't have a Whisper endpoint, so use OpenAI for STT
+// For Full OpenWebUI (STT + LLM):
+//   Set USE_OWUI_STT = true and USE_OWUI_SESSIONS = true
+//   Both will use OWUI_BASE_URL with LLM_API_KEY
+// For Mixed (OpenAI STT + OpenWebUI LLM):
+//   Set USE_OWUI_STT = false, USE_OWUI_SESSIONS = true
+//   STT uses OpenAI, LLM uses OpenWebUI
 
 // Speech-to-Text endpoint (Whisper-compatible)
+// Set USE_OWUI_STT to true to use OpenWebUI's transcription endpoint instead of OpenAI
+// When true, uses OWUI_BASE_URL + "/api/v1/audio/transcriptions" with LLM_API_KEY
+const bool USE_OWUI_STT = false;  // Set to true to use OpenWebUI for STT
+
+// OpenAI Whisper settings (used when USE_OWUI_STT = false)
 const char *STT_HOST = "api.openai.com";
 const int STT_PORT = 443;
 const char *STT_PATH = "/v1/audio/transcriptions";
