@@ -11,11 +11,50 @@ static int HEIGHT = 135;
 
 // Credentials are now in secrets.h
 
-// Audio settings
-static const int SAMPLE_RATE = 8000;
-static const int RECORD_SECONDS = 5;
-static const int RECORD_SAMPLES = SAMPLE_RATE * RECORD_SECONDS;
+// Audio quality profiles
+struct AudioProfile {
+  const char* name;
+  int sampleRate;
+  int recordSeconds;
+  const char* quality;
+};
+
+// Profiles for M5StickC Plus2 (limited RAM ~120KB safe)
+static const AudioProfile STICK_PROFILES[] = {
+  {"Standard", 8000, 5, "Good"},      // 80KB - default
+  {"HQ Short", 16000, 3, "Excellent"} // 96KB - high quality
+};
+
+// Profiles for Core2/CoreS3 (more RAM ~300KB+ safe)
+static const AudioProfile CORE_PROFILES[] = {
+  {"Standard", 8000, 8, "Good"},       // 128KB - balanced default
+  {"Long", 8000, 15, "Good"},           // 240KB - extended recording
+  {"HQ Short", 16000, 5, "Excellent"} // 160KB - high quality, quick
+
+};
+
+// Current audio settings (dynamic)
+static int SAMPLE_RATE = 8000;
+static int RECORD_SECONDS = 5;
+static int RECORD_SAMPLES = SAMPLE_RATE * RECORD_SECONDS;
 static int16_t *audioBuffer = nullptr;
+
+// Profile management
+static int currentProfileIndex = 0;
+static bool isLargeDevice = false; // Core2/CoreS3 vs StickC
+static int numProfiles = 2;
+static const AudioProfile* deviceProfiles = STICK_PROFILES;
+
+// Dynamic system prompt (built based on device type)
+static int currentMaxWords = 20;
+static String systemPrompt = "";
+
+// Build system prompt with device-appropriate word limit
+void buildSystemPrompt() {
+  currentMaxWords = isLargeDevice ? LLM_MAX_WORDS_LARGE : LLM_MAX_WORDS_SMALL;
+  systemPrompt = String(LLM_SYSTEM_PROMPT_BASE) + " in " + String(currentMaxWords) + " words or less.";
+  Serial.printf("System prompt: %s\n", systemPrompt.c_str());
+}
 
 // Voice Activity Detection (VAD) settings
 static const int VAD_SILENCE_THRESHOLD = 500;  // RMS threshold for silence (adjust based on testing)
@@ -30,6 +69,37 @@ String currentSessionId = "";
 
 // Track actual recorded samples (for VAD early stop)
 int actualRecordedSamples = RECORD_SAMPLES;
+
+// Apply selected audio profile
+void applyAudioProfile(int profileIndex) {
+  if (profileIndex < 0 || profileIndex >= numProfiles) return;
+  
+  const AudioProfile& profile = deviceProfiles[profileIndex];
+  SAMPLE_RATE = profile.sampleRate;
+  RECORD_SECONDS = profile.recordSeconds;
+  RECORD_SAMPLES = SAMPLE_RATE * RECORD_SECONDS;
+  currentProfileIndex = profileIndex;
+  
+  // Free old buffer if exists (will reallocate on next recording)
+  if (audioBuffer != nullptr) {
+    free(audioBuffer);
+    audioBuffer = nullptr;
+  }
+  
+  Serial.printf("Profile: %s (%dHz, %ds, %s)\n", 
+                profile.name, profile.sampleRate, profile.recordSeconds, profile.quality);
+}
+
+// Cycle to next profile
+void nextAudioProfile() {
+  int nextIndex = (currentProfileIndex + 1) % numProfiles;
+  applyAudioProfile(nextIndex);
+}
+
+// Get current profile name
+const char* getCurrentProfileName() {
+  return deviceProfiles[currentProfileIndex].name;
+}
 
 // Real-time audio display
 static volatile bool isRecording = false;
@@ -1144,7 +1214,7 @@ String askGPT(const String &question) {
                   int nextRoleIdx = chatData.indexOf("\"role\":", roleIdx + 1);
                   bool isLastUserMsg = (nextRoleIdx < 0 || nextRoleIdx > chatData.indexOf("\"currentId\"", historyIdx));
                   if (isLastUserMsg) {
-                    content += String(LLM_SYSTEM_PROMPT);
+                    content += systemPrompt;
                   }
                 }
                 
@@ -1167,7 +1237,7 @@ String askGPT(const String &question) {
     escaped.replace("\"", "\\\"");
     escaped.replace("\n", " ");
     
-    messagesArray = "{\"role\":\"user\",\"content\":\"" + escaped + String(LLM_SYSTEM_PROMPT) + "\"}";
+    messagesArray = "{\"role\":\"user\",\"content\":\"" + escaped + systemPrompt + "\"}";
   }
 
   // Escape question for non-OpenWebUI API formats
@@ -1202,7 +1272,7 @@ String askGPT(const String &question) {
            "\"type\":\"input_text\","
            "\"text\":\"" +
            escaped +
-           String(LLM_SYSTEM_PROMPT) + "\""
+           systemPrompt + "\""
            "}"
            "]"
            "}"
@@ -1227,7 +1297,7 @@ String askGPT(const String &question) {
            "\"role\":\"user\","
            "\"content\":\"" +
            escaped +
-           String(LLM_SYSTEM_PROMPT) + "\""
+           systemPrompt + "\""
            "}"
            "]"
            "}";
@@ -1480,6 +1550,31 @@ void setup() {
   HEIGHT = M5.Display.height();
   Serial.printf("Display: %dx%d\n", WIDTH, HEIGHT);
 
+  // Detect device type based on display size
+  // Core2/CoreS3: 320x240, StickC Plus2: 240x135 (rotated)
+  size_t freeHeap = ESP.getFreeHeap();
+  Serial.printf("Free heap at startup: %d bytes\n", freeHeap);
+  
+  // Use display size as primary indicator (more reliable than heap)
+  // Core2/CoreS3 have 320x240 displays, StickC has 240x135
+  if (WIDTH >= 320 && HEIGHT >= 240) {
+    isLargeDevice = true;
+    deviceProfiles = CORE_PROFILES;
+    numProfiles = 3;
+    Serial.println("Device: Core2/CoreS3 (large screen)");
+  } else {
+    isLargeDevice = false;
+    deviceProfiles = STICK_PROFILES;
+    numProfiles = 2;
+    Serial.println("Device: StickC Plus2 (small screen)");
+  }
+  Serial.printf("Max words: %d\n", isLargeDevice ? LLM_MAX_WORDS_LARGE : LLM_MAX_WORDS_SMALL);
+  
+  // Apply default profile and build system prompt
+  applyAudioProfile(0);
+  buildSystemPrompt();
+  Serial.printf("Free heap: %d bytes\n", freeHeap);
+
   drawScreen("Connecting...");
 
   Serial.print("Connecting to WiFi: ");
@@ -1520,18 +1615,15 @@ void setup() {
     Serial.println("WARNING: NTP sync failed, timestamps will be inaccurate");
   }
 
-  // Pre-allocate audio buffer
-  audioBuffer = (int16_t *)malloc(RECORD_SAMPLES * sizeof(int16_t));
-  if (!audioBuffer) {
-    Serial.println("CRITICAL ERROR: Failed to allocate audio buffer!");
-    drawScreen("Mem Error");
-    while (1)
-      delay(100);
-  }
-  Serial.println("Audio buffer allocated");
+  // Audio buffer will be allocated on first recording based on profile
+  Serial.println("Audio buffer will be allocated on first recording");
 
   // Show appropriate prompt based on device capabilities
-  drawScreen("Press A\nto ask a question");
+  const AudioProfile& profile = deviceProfiles[currentProfileIndex];
+  String startMsg = String("Press A to ask\n") + 
+                    String(profile.sampleRate/1000) + "kHz " + 
+                    String(profile.recordSeconds) + "s";
+  drawScreen(startMsg);
   Serial.println("\nReady! Press button A to ask a question.\n");
 }
 
@@ -1579,20 +1671,48 @@ void loop() {
     Serial.println("\n*** INTERACTION COMPLETE ***\n");
   }
 
-  // Button B starts a new chat session
-  if (M5.BtnB.wasClicked()) {
-    Serial.println("Button B pressed - starting new chat session");
-    
-    if (USE_OWUI_SESSIONS) {
-      // Clear current session to start fresh
-      currentChatId = "";
-      currentSessionId = "";
-      Serial.println("Chat session cleared - next interaction will create new chat");
-      drawScreen("New Chat\nStarted");
-      delay(1500);
+  // Button B: Click = new chat, Hold 2s = toggle audio profile
+  static unsigned long btnBPressTime = 0;
+  static bool btnBHeld = false;
+  
+  if (M5.BtnB.wasPressed()) {
+    btnBPressTime = millis();
+    btnBHeld = false;
+  }
+  
+  if (M5.BtnB.isPressed() && !btnBHeld) {
+    if (millis() - btnBPressTime >= 2000) {
+      // Long press (2s) - toggle audio profile
+      btnBHeld = true;
+      nextAudioProfile();
+      
+      const AudioProfile& profile = deviceProfiles[currentProfileIndex];
+      String msg = String("Profile:\n") + profile.name + "\n" + 
+                   String(profile.sampleRate/1000) + "kHz " + 
+                   String(profile.recordSeconds) + "s";
+      drawScreen(msg);
+      Serial.printf("Switched to profile: %s\n", profile.name);
+      delay(2000);
+      drawScreen("Press A\nto ask a question");
     }
-    
-    drawScreen("Press A\nto ask a question");
+  }
+  
+  if (M5.BtnB.wasReleased()) {
+    if (!btnBHeld && (millis() - btnBPressTime < 2000)) {
+      // Short click - new chat session
+      Serial.println("Button B clicked - starting new chat session");
+      
+      if (USE_OWUI_SESSIONS) {
+        currentChatId = "";
+        currentSessionId = "";
+        Serial.println("Chat session cleared - next interaction will create new chat");
+        drawScreen("New Chat\nStarted");
+        delay(1500);
+      }
+      
+      drawScreen("Press A\nto ask a question");
+    }
+    btnBHeld = false;
   }
 
   delay(20);

@@ -31,8 +31,13 @@ const char *LLM_URL = "https://api.openai.com/v1/responses";
 const char *LLM_MODEL = "gpt-4o-mini";
 // Set to true if using OpenAI Responses API format, false for standard chat completions
 const bool LLM_USE_RESPONSES_API = true;
-// System prompt added to user questions (leave empty "" for none)
-const char *LLM_SYSTEM_PROMPT = " Answer in 20 words or less.";
+
+// System prompt configuration
+// The actual prompt is built dynamically: LLM_SYSTEM_PROMPT_BASE + " in X words or less."
+// where X is determined by device type (small screen = fewer words)
+const char *LLM_SYSTEM_PROMPT_BASE = " Answer";  // Base prompt (word limit added automatically)
+const int LLM_MAX_WORDS_SMALL = 20;   // For StickC Plus2 (small screen)
+const int LLM_MAX_WORDS_LARGE = 50;   // For Core2/CoreS3 (larger screen)
 
 // OpenWebUI Session Tracking (set to true to save chats in OpenWebUI history)
 const bool USE_OWUI_SESSIONS = true;  // Enable for OpenWebUI chat history
