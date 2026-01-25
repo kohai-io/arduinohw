@@ -118,6 +118,9 @@ static size_t lastTtsLength = 0;
 static int lastTtsSampleRate = 44100;
 static int lastTtsChannels = 1;
 
+// Current TTS voice (toggles between TTS_VOICE_1 and TTS_VOICE_2)
+static bool useTtsVoice1 = true;
+
 // Callback for libhelix MP3 decoder - receives decoded PCM samples
 void ttsAudioCallback(MP3FrameInfo &info, short *pwm_buffer, size_t len, void *ref) {
   ttsSampleRate = info.samprate;
@@ -165,9 +168,10 @@ void speakText(const String &text) {
   http.setTimeout(30000);
   
   // Build JSON request - OpenWebUI always returns MP3 regardless of format
+  const char* currentVoice = useTtsVoice1 ? TTS_VOICE_1 : TTS_VOICE_2;
   String body = "{\"model\":\"" + String(TTS_MODEL) + "\","
                 "\"input\":\"" + text + "\","
-                "\"voice\":\"" + String(TTS_VOICE) + "\"}";
+                "\"voice\":\"" + String(currentVoice) + "\"}";
   
   Serial.println("Requesting TTS...");
   int httpCode = http.POST(body);
@@ -2017,10 +2021,38 @@ void loop() {
     btnBHeld = false;
   }
 
-  // Button C: Replay last TTS audio (Core2/CoreS3 only)
-  if (isLargeDevice && USE_TTS && M5.BtnC.wasPressed()) {
-    Serial.println("Button C pressed - replaying TTS");
-    replayTts();
+  // Button C: Click = replay TTS, Hold 2s = toggle voice (Core2/CoreS3 only)
+  static unsigned long btnCPressTime = 0;
+  static bool btnCHeld = false;
+  
+  if (isLargeDevice && USE_TTS) {
+    if (M5.BtnC.wasPressed()) {
+      btnCPressTime = millis();
+      btnCHeld = false;
+    }
+    
+    if (M5.BtnC.isPressed() && !btnCHeld) {
+      if (millis() - btnCPressTime >= 2000) {
+        // Long press (2s) - toggle TTS voice
+        btnCHeld = true;
+        useTtsVoice1 = !useTtsVoice1;
+        const char* newVoice = useTtsVoice1 ? TTS_VOICE_1 : TTS_VOICE_2;
+        String msg = String("Voice:\n") + newVoice;
+        drawScreen(msg);
+        Serial.printf("Switched to TTS voice: %s\n", newVoice);
+        delay(1500);
+        drawScreen("Press A\nto ask a question");
+      }
+    }
+    
+    if (M5.BtnC.wasReleased()) {
+      if (!btnCHeld && (millis() - btnCPressTime < 2000)) {
+        // Short click - replay TTS
+        Serial.println("Button C clicked - replaying TTS");
+        replayTts();
+      }
+      btnCHeld = false;
+    }
   }
 
   delay(20);

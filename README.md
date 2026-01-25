@@ -123,7 +123,8 @@ arduino-cli upload -p [PORT] --fqbn m5stack:esp32:m5stick_c_plus2
 - **Button A:** Record and ask a question
 - **Button B (click):** Start a new chat session (clears conversation history)
 - **Button B (hold 2s):** Toggle audio quality profile
-- **Button C:** Replay last TTS response (Core2/CoreS3 only)
+- **Button C (click):** Replay last TTS response (Core2/CoreS3 only)
+- **Button C (hold 2s):** Toggle between TTS voices (Core2/CoreS3 only)
 
 ### Conversation Features
 
@@ -192,7 +193,8 @@ Devices with speakers (Core2, CoreS3) can speak responses aloud using OpenWebUI'
 ```cpp
 const bool USE_TTS = true;            // Enable spoken responses
 const char *TTS_MODEL = "tts-1";      // tts-1 or tts-1-hd
-const char *TTS_VOICE = "alloy";      // alloy, echo, fable, onyx, nova, shimmer
+const char *TTS_VOICE_1 = "alloy";    // Primary voice (Button C hold 2s to toggle)
+const char *TTS_VOICE_2 = "nova";     // Secondary voice
 ```
 
 ### Available Voices
@@ -206,9 +208,10 @@ const char *TTS_VOICE = "alloy";      // alloy, echo, fable, onyx, nova, shimmer
 | **nova** | Friendly, upbeat |
 | **shimmer** | Soft, gentle |
 
-### Replay Feature
+### Replay & Voice Toggle
 
-Press **Button C** to replay the last spoken response.
+- Press **Button C** to replay the last spoken response
+- Hold **Button C for 2 seconds** to toggle between the two configured voices
 
 ## Architecture
 
