@@ -17,11 +17,25 @@ static const int RECORD_SECONDS = 5;
 static const int RECORD_SAMPLES = SAMPLE_RATE * RECORD_SECONDS;
 static int16_t *audioBuffer = nullptr;
 
+// Voice Activity Detection (VAD) settings
+static const int VAD_SILENCE_THRESHOLD = 500;  // RMS threshold for silence (adjust based on testing)
+static const float VAD_SILENCE_DURATION = 1.5; // Seconds of silence before auto-stop
+static const bool VAD_ENABLED = true;          // Enable/disable VAD
+
 String response = "Press A\nto ask a question";
 
 // OpenWebUI chat session tracking
 String currentChatId = "";
 String currentSessionId = "";
+
+// Track actual recorded samples (for VAD early stop)
+int actualRecordedSamples = RECORD_SAMPLES;
+
+// Real-time audio display
+static volatile bool isRecording = false;
+static volatile int currentRmsLevel = 0;
+static volatile int recordingSecondsLeft = 0;
+static TaskHandle_t displayTaskHandle = NULL;
 
 // UUID v4 generator for message and session IDs
 String generateUUID() {
@@ -88,6 +102,118 @@ void drawProgress(int seconds) {
   drawScreen(msg);
 }
 
+// Display task runs on core 0, updates display in real-time
+void displayTask(void *parameter) {
+  while (true) {
+    if (isRecording) {
+      drawAudioLevel(recordingSecondsLeft, currentRmsLevel);
+    }
+    vTaskDelay(50 / portTICK_PERIOD_MS); // ~20fps update rate
+  }
+}
+
+// Track previous values to avoid unnecessary redraws
+static int lastDisplayedSeconds = -1;
+static int lastDisplayedBars = -1;
+static bool lastSpeakingState = false;
+static bool audioLevelInitialized = false;
+
+void initAudioLevelDisplay() {
+  M5.Display.fillScreen(TFT_BLACK);
+  M5.Display.setTextColor(TFT_WHITE);
+  M5.Display.setTextDatum(MC_DATUM);
+  M5.Display.setTextFont(2);
+  
+  // Draw static title
+  M5.Display.drawString("Recording...", WIDTH / 2, 15);
+  
+  // Draw inactive bars as background
+  int barHeight = 12;
+  int barSpacing = 3;
+  int maxBars = 10;
+  int barStartY = 75;
+  int totalWidth = WIDTH - 40;
+  int barWidth = (totalWidth / maxBars) - barSpacing;
+  int startX = (WIDTH - (maxBars * (barWidth + barSpacing) - barSpacing)) / 2;
+  
+  for (int i = 0; i < maxBars; i++) {
+    int x = startX + i * (barWidth + barSpacing);
+    M5.Display.fillRect(x, barStartY, barWidth, barHeight, TFT_DARKGREY);
+  }
+  
+  lastDisplayedSeconds = -1;
+  lastDisplayedBars = -1;
+  lastSpeakingState = false;
+  audioLevelInitialized = true;
+}
+
+void drawAudioLevel(int seconds, int rmsLevel) {
+  // Initialize on first call
+  if (!audioLevelInitialized) {
+    initAudioLevelDisplay();
+  }
+  
+  // Bar dimensions
+  int barHeight = 12;
+  int barSpacing = 3;
+  int maxBars = 10;
+  int barStartY = 75;
+  int totalWidth = WIDTH - 40;
+  int barWidth = (totalWidth / maxBars) - barSpacing;
+  int startX = (WIDTH - (maxBars * (barWidth + barSpacing) - barSpacing)) / 2;
+  
+  // Only update countdown if changed
+  if (seconds != lastDisplayedSeconds) {
+    // Clear previous countdown area
+    M5.Display.fillRect(WIDTH/2 - 30, 30, 60, 35, TFT_BLACK);
+    
+    M5.Display.setTextFont(4);
+    M5.Display.setTextDatum(MC_DATUM);
+    M5.Display.setTextColor(seconds <= 1 ? TFT_RED : TFT_GREEN);
+    M5.Display.drawString(String(seconds), WIDTH / 2, 45);
+    lastDisplayedSeconds = seconds;
+  }
+  
+  // Calculate active bars
+  int activeBars = map(constrain(rmsLevel, 0, 3000), 0, 3000, 0, maxBars);
+  
+  // Only update bars if changed
+  if (activeBars != lastDisplayedBars) {
+    for (int i = 0; i < maxBars; i++) {
+      int x = startX + i * (barWidth + barSpacing);
+      uint16_t color;
+      
+      if (i < activeBars) {
+        if (i < 6) {
+          color = TFT_GREEN;
+        } else if (i < 8) {
+          color = TFT_YELLOW;
+        } else {
+          color = TFT_RED;
+        }
+      } else {
+        color = TFT_DARKGREY;
+      }
+      
+      M5.Display.fillRect(x, barStartY, barWidth, barHeight, color);
+    }
+    lastDisplayedBars = activeBars;
+  }
+  
+  // Only update status text if speaking state changed
+  bool isSpeaking = (rmsLevel >= VAD_SILENCE_THRESHOLD);
+  if (isSpeaking != lastSpeakingState) {
+    // Clear status area
+    M5.Display.fillRect(0, HEIGHT - 25, WIDTH, 20, TFT_BLACK);
+    
+    M5.Display.setTextFont(1);
+    M5.Display.setTextDatum(MC_DATUM);
+    M5.Display.setTextColor(isSpeaking ? TFT_GREEN : TFT_DARKGREY);
+    M5.Display.drawString(isSpeaking ? "Speaking" : "Listening...", WIDTH / 2, HEIGHT - 15);
+    lastSpeakingState = isSpeaking;
+  }
+}
+
 bool recordAudio() {
   Serial.println("\n========== RECORDING ==========");
 
@@ -107,24 +233,93 @@ bool recordAudio() {
   Serial.println("Starting mic...");
   M5.Mic.begin();
 
-  int samplesPerSecond = SAMPLE_RATE;
-  for (int sec = 0; sec < RECORD_SECONDS; sec++) {
-    Serial.printf("Recording second %d/%d...\n", sec + 1, RECORD_SECONDS);
-    drawProgress(RECORD_SECONDS - sec);
-    M5.Mic.record(&audioBuffer[sec * samplesPerSecond], samplesPerSecond,
-                  SAMPLE_RATE);
+  // Use smaller chunks for more responsive display (250ms chunks = 4 updates/sec)
+  const int CHUNK_MS = 250;
+  const int SAMPLES_PER_CHUNK = SAMPLE_RATE * CHUNK_MS / 1000;
+  const int CHUNKS_PER_SECOND = 1000 / CHUNK_MS;
+  
+  int totalSamplesRecorded = 0;
+  int silentChunks = 0;
+  int silenceChunkThreshold = (int)(VAD_SILENCE_DURATION * CHUNKS_PER_SECOND);
+  bool stoppedEarly = false;
+  
+  // Start display task for real-time updates
+  isRecording = true;
+  recordingSecondsLeft = RECORD_SECONDS;
+  currentRmsLevel = 0;
+  audioLevelInitialized = false; // Reset so display initializes fresh
+  
+  // Create display task on core 0 (main loop runs on core 1)
+  if (displayTaskHandle == NULL) {
+    xTaskCreatePinnedToCore(displayTask, "displayTask", 4096, NULL, 1, &displayTaskHandle, 0);
+  }
+  
+  int totalChunks = RECORD_SECONDS * CHUNKS_PER_SECOND;
+  Serial.printf("Recording %d chunks of %dms each...\n", totalChunks, CHUNK_MS);
+  
+  for (int chunk = 0; chunk < totalChunks; chunk++) {
+    int offset = totalSamplesRecorded;
+    
+    // Record one chunk
+    M5.Mic.record(&audioBuffer[offset], SAMPLES_PER_CHUNK, SAMPLE_RATE);
     while (M5.Mic.isRecording()) {
-      delay(10);
+      delay(1);
+    }
+    
+    totalSamplesRecorded += SAMPLES_PER_CHUNK;
+    
+    // Calculate RMS for this chunk (skip first 2 chunks to ignore button click)
+    if (chunk >= 2) {
+      int64_t sum = 0;
+      for (int i = 0; i < SAMPLES_PER_CHUNK; i++) {
+        int16_t sample = audioBuffer[offset + i];
+        sum += (int64_t)sample * sample;
+      }
+      currentRmsLevel = (int)sqrt(sum / SAMPLES_PER_CHUNK);
+    }
+    
+    // Update countdown
+    recordingSecondsLeft = RECORD_SECONDS - (chunk / CHUNKS_PER_SECOND);
+    
+    // Log every second
+    if (chunk % CHUNKS_PER_SECOND == 0) {
+      Serial.printf("Recording: %ds, RMS: %d\n", chunk / CHUNKS_PER_SECOND + 1, currentRmsLevel);
+    }
+    
+    // VAD check after first second
+    if (VAD_ENABLED && chunk >= CHUNKS_PER_SECOND) {
+      if (currentRmsLevel < VAD_SILENCE_THRESHOLD) {
+        silentChunks++;
+        
+        if (silentChunks >= silenceChunkThreshold) {
+          Serial.println("Silence threshold - stopping");
+          stoppedEarly = true;
+          break;
+        }
+      } else {
+        silentChunks = 0;
+      }
     }
   }
 
+  // Stop recording
+  isRecording = false;
   M5.Mic.end();
-  Serial.println("Recording complete");
+  
+  // Update actual recorded samples for transcription
+  actualRecordedSamples = totalSamplesRecorded;
+  
+  if (stoppedEarly) {
+    Serial.printf("Recording stopped early after %d samples (%.1fs)\n", 
+                  totalSamplesRecorded, (float)totalSamplesRecorded / SAMPLE_RATE);
+  } else {
+    Serial.println("Recording complete");
+  }
 
   // Audio stats
   int16_t minVal = 32767, maxVal = -32768;
   int64_t sum = 0;
-  for (int i = 0; i < RECORD_SAMPLES; i++) {
+  for (int i = 0; i < actualRecordedSamples; i++) {
     if (audioBuffer[i] < minVal)
       minVal = audioBuffer[i];
     if (audioBuffer[i] > maxVal)
@@ -132,7 +327,7 @@ bool recordAudio() {
     sum += abs(audioBuffer[i]);
   }
   Serial.printf("Audio stats: min=%d, max=%d, avg=%lld\n", minVal, maxVal,
-                sum / RECORD_SAMPLES);
+                sum / actualRecordedSamples);
   Serial.println("================================\n");
 
   return true;
@@ -191,7 +386,7 @@ String transcribeAudio() {
   }
   Serial.println("Connected");
 
-  int audioDataSize = RECORD_SAMPLES * sizeof(int16_t);
+  int audioDataSize = actualRecordedSamples * sizeof(int16_t);
   uint8_t wavHeader[44];
   createWavHeader(wavHeader, audioDataSize);
 
