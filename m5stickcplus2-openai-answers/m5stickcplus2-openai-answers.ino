@@ -3,6 +3,7 @@
 #include <M5Unified.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <time.h>
 
 // Display dimensions - set dynamically in setup()
 static int WIDTH = 240;
@@ -17,6 +18,42 @@ static const int RECORD_SAMPLES = SAMPLE_RATE * RECORD_SECONDS;
 static int16_t *audioBuffer = nullptr;
 
 String response = "Press A\nto ask a question";
+
+// OpenWebUI chat session tracking
+String currentChatId = "";
+String currentSessionId = "";
+
+// UUID v4 generator for message and session IDs
+String generateUUID() {
+  String uuid = "";
+  const char* hex = "0123456789abcdef";
+  
+  for (int i = 0; i < 36; i++) {
+    if (i == 8 || i == 13 || i == 18 || i == 23) {
+      uuid += '-';
+    } else if (i == 14) {
+      uuid += '4'; // Version 4
+    } else if (i == 19) {
+      uuid += hex[(esp_random() & 0x3) | 0x8]; // Variant bits
+    } else {
+      uuid += hex[esp_random() & 0xF];
+    }
+  }
+  
+  return uuid;
+}
+
+// Get Unix timestamp in seconds
+unsigned long getUnixTimestamp() {
+  time_t now;
+  time(&now);
+  return (unsigned long)now;
+}
+
+// Get Unix timestamp in milliseconds
+unsigned long long getUnixTimestampMs() {
+  return (unsigned long long)getUnixTimestamp() * 1000;
+}
 
 void drawScreen(const String &text) {
   Serial.println("Drawing to screen: " + text);
@@ -178,7 +215,7 @@ String transcribeAudio() {
   Serial.println("Sending request headers...");
   client.print(String("POST ") + STT_PATH + " HTTP/1.1\r\n");
   client.print(String("Host: ") + STT_HOST + "\r\n");
-  client.print("Authorization: Bearer " + String(API_KEY) + "\r\n");
+  client.print("Authorization: Bearer " + String(STT_API_KEY) + "\r\n");
   client.print("Content-Type: multipart/form-data; boundary=" + boundary +
                "\r\n");
   client.print("Content-Length: " + String(contentLength) + "\r\n");
@@ -283,18 +320,365 @@ String transcribeAudio() {
   return result;
 }
 
+String createChatSession(const String &title) {
+  Serial.println("\n========== CREATE CHAT SESSION ==========");
+  
+  HTTPClient http;
+  WiFiClientSecure client;
+  client.setInsecure();
+  
+  String url = String(OWUI_BASE_URL) + "/api/v1/chats/new";
+  Serial.printf("Creating chat at: %s\n", url.c_str());
+  
+  http.begin(client, url);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Authorization", String("Bearer ") + LLM_API_KEY);
+  http.setTimeout(30000);
+  
+  // OpenWebUI /api/v1/chats/new body format with history and timestamp
+  unsigned long long timestamp = getUnixTimestampMs(); // Milliseconds for chat creation
+  String body = "{"
+                "\"chat\":{"
+                "\"title\":\"" + title + "\","
+                "\"models\":[\"" + String(LLM_MODEL) + "\"],"
+                "\"timestamp\":" + String((unsigned long)timestamp) + ","
+                "\"history\":{"
+                "\"messages\":{},"
+                "\"currentId\":null"
+                "}"
+                "}"
+                "}";
+  
+  Serial.println("Request body: " + body);
+  int httpCode = http.POST(body);
+  Serial.printf("HTTP response code: %d\n", httpCode);
+  
+  // Always read the response body
+  String resp = http.getString();
+  http.end();
+  
+  Serial.println("Full response:");
+  Serial.println(resp);
+  Serial.printf("Response length: %d bytes\n", resp.length());
+  
+  if (httpCode < 200 || httpCode >= 300) {
+    Serial.println("ERROR: Non-2xx response code");
+    return "";
+  }
+  
+  // Parse chat ID from response
+  int idIdx = resp.indexOf("\"id\"");
+  if (idIdx < 0) {
+    Serial.println("ERROR: No 'id' field found in response!");
+    Serial.println("Searching for alternative fields...");
+    
+    // Try looking for chat_id or chatId
+    idIdx = resp.indexOf("\"chat_id\"");
+    if (idIdx < 0) idIdx = resp.indexOf("\"chatId\"");
+    if (idIdx < 0) {
+      Serial.println("ERROR: Could not find any ID field in response!");
+      return "";
+    }
+    Serial.println("Found alternative ID field");
+  }
+  
+  int start = resp.indexOf('"', idIdx + 4);
+  if (start < 0) {
+    Serial.println("ERROR: Could not find opening quote for ID value");
+    return "";
+  }
+  start++;
+  
+  String chatId;
+  for (unsigned int i = start; i < resp.length(); i++) {
+    if (resp[i] == '"') break;
+    chatId += resp[i];
+  }
+  
+  if (chatId.length() == 0) {
+    Serial.println("ERROR: Parsed chat ID is empty!");
+    return "";
+  }
+  
+  Serial.println("Chat ID: " + chatId);
+  Serial.printf("Chat ID length: %d\n", chatId.length());
+  Serial.println("=========================================\n");
+  
+  return chatId;
+}
+
+// Step 3: Update chat with user message
+bool updateChatWithUserMessage(const String &chatId, const String &userMsgId, const String &userContent) {
+  Serial.println("\n========== UPDATE CHAT WITH USER MESSAGE ==========");
+  
+  HTTPClient http;
+  WiFiClientSecure client;
+  client.setInsecure();
+  
+  String url = String(OWUI_BASE_URL) + "/api/v1/chats/" + chatId;
+  Serial.printf("Updating chat at: %s\n", url.c_str());
+  
+  http.begin(client, url);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Authorization", String("Bearer ") + LLM_API_KEY);
+  http.setTimeout(30000);
+  
+  unsigned long timestamp = getUnixTimestamp(); // Unix epoch in seconds
+  
+  String escapedContent = userContent;
+  escapedContent.replace("\\", "\\\\");
+  escapedContent.replace("\"", "\\\"");
+  escapedContent.replace("\n", "\\n");
+  
+  String body = "{"
+                "\"chat\":{"
+                "\"title\":\"M5 Voice Assistant\","
+                "\"history\":{"
+                "\"messages\":{"
+                "\"" + userMsgId + "\":{"
+                "\"id\":\"" + userMsgId + "\","
+                "\"parentId\":null,"
+                "\"childrenIds\":[],"
+                "\"role\":\"user\","
+                "\"content\":\"" + escapedContent + "\","
+                "\"timestamp\":" + String(timestamp) + ","
+                "\"models\":[\"" + String(LLM_MODEL) + "\"]"
+                "}"
+                "},"
+                "\"currentId\":\"" + userMsgId + "\""
+                "},"
+                "\"messages\":["
+                "{"
+                "\"id\":\"" + userMsgId + "\","
+                "\"role\":\"user\","
+                "\"content\":\"" + escapedContent + "\""
+                "}"
+                "]"
+                "}"
+                "}";
+  
+  Serial.println("Updating with user message...");
+  int httpCode = http.POST(body);
+  Serial.printf("HTTP response code: %d\n", httpCode);
+  
+  String resp = http.getString();
+  http.end();
+  
+  if (httpCode >= 200 && httpCode < 300) {
+    Serial.println("User message saved successfully");
+    Serial.println("===================================================\n");
+    return true;
+  } else {
+    Serial.println("Error saving user message:");
+    Serial.println(resp);
+    Serial.println("===================================================\n");
+    return false;
+  }
+}
+
+// Step 5: Call completed handler
+bool chatCompleted(const String &chatId, const String &sessionId, const String &userMsgId, 
+                   const String &userContent, const String &assistantMsgId, const String &assistantContent) {
+  Serial.println("\n========== CHAT COMPLETED ==========");
+  
+  HTTPClient http;
+  WiFiClientSecure client;
+  client.setInsecure();
+  
+  String url = String(OWUI_BASE_URL) + "/api/chat/completed";
+  Serial.printf("Calling completed at: %s\n", url.c_str());
+  
+  http.begin(client, url);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Authorization", String("Bearer ") + LLM_API_KEY);
+  http.setTimeout(30000);
+  
+  String escapedUser = userContent;
+  escapedUser.replace("\\", "\\\\");
+  escapedUser.replace("\"", "\\\"");
+  escapedUser.replace("\n", "\\n");
+  
+  String escapedAssistant = assistantContent;
+  escapedAssistant.replace("\\", "\\\\");
+  escapedAssistant.replace("\"", "\\\"");
+  escapedAssistant.replace("\n", "\\n");
+  
+  String body = "{"
+                "\"model\":\"" + String(LLM_MODEL) + "\","
+                "\"messages\":["
+                "{"
+                "\"id\":\"" + userMsgId + "\","
+                "\"role\":\"user\","
+                "\"content\":\"" + escapedUser + "\""
+                "},"
+                "{"
+                "\"id\":\"" + assistantMsgId + "\","
+                "\"role\":\"assistant\","
+                "\"content\":\"" + escapedAssistant + "\""
+                "}"
+                "],"
+                "\"chat_id\":\"" + chatId + "\","
+                "\"session_id\":\"" + sessionId + "\","
+                "\"id\":\"" + assistantMsgId + "\""
+                "}";
+  
+  Serial.println("Calling completed handler...");
+  int httpCode = http.POST(body);
+  Serial.printf("HTTP response code: %d\n", httpCode);
+  
+  String resp = http.getString();
+  http.end();
+  
+  if (httpCode >= 200 && httpCode < 300) {
+    Serial.println("Completed handler called successfully");
+    Serial.println("====================================\n");
+    return true;
+  } else {
+    Serial.println("Error calling completed:");
+    Serial.println(resp);
+    Serial.println("====================================\n");
+    return false;
+  }
+}
+
+// Step 6: Update chat with full conversation history
+bool saveChatHistory(const String &chatId, const String &userMsgId, const String &userContent, 
+                     const String &assistantMsgId, const String &assistantContent) {
+  Serial.println("\n========== SAVING CHAT HISTORY ==========");
+  
+  HTTPClient http;
+  WiFiClientSecure client;
+  client.setInsecure();
+  
+  String url = String(OWUI_BASE_URL) + "/api/v1/chats/" + chatId;
+  Serial.printf("Saving to: %s\n", url.c_str());
+  
+  http.begin(client, url);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Authorization", String("Bearer ") + LLM_API_KEY);
+  http.setTimeout(30000);
+  
+  // Get current timestamp in seconds
+  unsigned long timestamp = getUnixTimestamp();
+  
+  // Escape content for JSON
+  String escapedUser = userContent;
+  escapedUser.replace("\\", "\\\\");
+  escapedUser.replace("\"", "\\\"");
+  escapedUser.replace("\n", "\\n");
+  
+  String escapedAssistant = assistantContent;
+  escapedAssistant.replace("\\", "\\\\");
+  escapedAssistant.replace("\"", "\\\"");
+  escapedAssistant.replace("\n", "\\n");
+  
+  // Build chat history JSON with full structure (Step 6)
+  String body = "{"
+                "\"chat\":{"
+                "\"title\":\"M5 Voice Assistant\","
+                "\"history\":{"
+                "\"messages\":{"
+                "\"" + userMsgId + "\":{"
+                "\"id\":\"" + userMsgId + "\","
+                "\"parentId\":null,"
+                "\"childrenIds\":[\"" + assistantMsgId + "\"],"
+                "\"role\":\"user\","
+                "\"content\":\"" + escapedUser + "\","
+                "\"timestamp\":" + String(timestamp) + ","
+                "\"models\":[\"" + String(LLM_MODEL) + "\"]"
+                "},"
+                "\"" + assistantMsgId + "\":{"
+                "\"id\":\"" + assistantMsgId + "\","
+                "\"parentId\":\"" + userMsgId + "\","
+                "\"childrenIds\":[],"
+                "\"role\":\"assistant\","
+                "\"content\":\"" + escapedAssistant + "\","
+                "\"model\":\"" + String(LLM_MODEL) + "\","
+                "\"timestamp\":" + String(timestamp + 5) + ","
+                "\"done\":true"
+                "}"
+                "},"
+                "\"currentId\":\"" + assistantMsgId + "\""
+                "},"
+                "\"messages\":["
+                "{"
+                "\"id\":\"" + userMsgId + "\","
+                "\"role\":\"user\","
+                "\"content\":\"" + escapedUser + "\""
+                "},"
+                "{"
+                "\"id\":\"" + assistantMsgId + "\","
+                "\"role\":\"assistant\","
+                "\"content\":\"" + escapedAssistant + "\""
+                "}"
+                "]"
+                "}"
+                "}";
+  
+  Serial.println("Saving history...");
+  int httpCode = http.POST(body);
+  Serial.printf("HTTP response code: %d\n", httpCode);
+  
+  String resp = http.getString();
+  http.end();
+  
+  if (httpCode >= 200 && httpCode < 300) {
+    Serial.println("Chat history saved successfully");
+    Serial.println("=========================================\n");
+    return true;
+  } else {
+    Serial.println("Error saving chat history:");
+    Serial.println(resp);
+    Serial.println("=========================================\n");
+    return false;
+  }
+}
+
 String askGPT(const String &question) {
   Serial.println("\n========== ASKING LLM ==========");
   Serial.println("Question: " + question);
+
+  // Step 1: Create or reuse chat session for OpenWebUI
+  if (USE_OWUI_SESSIONS && currentChatId.length() == 0) {
+    currentChatId = createChatSession("M5 Voice Assistant");
+    currentSessionId = generateUUID(); // Generate session ID once per chat
+    if (currentChatId.length() == 0) {
+      Serial.println("ERROR: Failed to create chat session!");
+      return "Session error";
+    }
+  }
+
+  // Step 2: Generate message IDs for OpenWebUI
+  String userMsgId = "";
+  String assistantMsgId = "";
+  if (USE_OWUI_SESSIONS) {
+    userMsgId = generateUUID();
+    assistantMsgId = generateUUID();
+    Serial.println("User message ID: " + userMsgId);
+    Serial.println("Assistant message ID: " + assistantMsgId);
+    
+    // Step 3: Update chat with user message before completion
+    if (!updateChatWithUserMessage(currentChatId, userMsgId, question)) {
+      Serial.println("ERROR: Failed to update chat with user message!");
+      return "Update error";
+    }
+  }
 
   HTTPClient http;
   WiFiClientSecure client;
   client.setInsecure();
 
-  Serial.printf("Connecting to LLM at %s...\n", LLM_URL);
-  http.begin(client, LLM_URL);
+  String url;
+  if (USE_OWUI_SESSIONS) {
+    url = String(OWUI_BASE_URL) + "/api/v1/chat/completions";
+  } else {
+    url = LLM_URL;
+  }
+  
+  Serial.printf("Connecting to LLM at %s...\n", url.c_str());
+  http.begin(client, url);
   http.addHeader("Content-Type", "application/json");
-  http.addHeader("Authorization", String("Bearer ") + API_KEY);
+  http.addHeader("Authorization", String("Bearer ") + LLM_API_KEY);
   http.setTimeout(90000);
 
   String escaped = question;
@@ -315,14 +699,14 @@ String askGPT(const String &question) {
            "\"type\":\"input_text\","
            "\"text\":\"" +
            escaped +
-           " Answer in 20 words or less.\""
+           String(LLM_SYSTEM_PROMPT) + "\""
            "}"
            "]"
            "}"
            "]"
            "}";
-  } else {
-    // Standard Chat Completions API format (OpenWebUI, etc.)
+  } else if (USE_OWUI_SESSIONS) {
+    // Step 4: OpenWebUI with chat session tracking
     body = "{"
            "\"model\":\"" + String(LLM_MODEL) + "\","
            "\"messages\":["
@@ -330,7 +714,24 @@ String askGPT(const String &question) {
            "\"role\":\"user\","
            "\"content\":\"" +
            escaped +
-           " Answer in 20 words or less.\""
+           String(LLM_SYSTEM_PROMPT) + "\""
+           "}"
+           "],"
+           "\"chat_id\":\"" + currentChatId + "\","
+           "\"id\":\"" + assistantMsgId + "\","
+           "\"session_id\":\"" + currentSessionId + "\","
+           "\"stream\":true"
+           "}";
+  } else {
+    // Standard Chat Completions API format
+    body = "{"
+           "\"model\":\"" + String(LLM_MODEL) + "\","
+           "\"messages\":["
+           "{"
+           "\"role\":\"user\","
+           "\"content\":\"" +
+           escaped +
+           String(LLM_SYSTEM_PROMPT) + "\""
            "}"
            "]"
            "}";
@@ -349,15 +750,97 @@ String askGPT(const String &question) {
     return "HTTP " + String(httpCode);
   }
 
-  String resp = http.getString();
-  http.end();
-
-  Serial.println("LLM response:");
-  Serial.println(resp);
-
-  String result;
+  // Handle async completion for OpenWebUI (uses WebSocket, not HTTP streaming)
+  String result = "";
+  if (USE_OWUI_SESSIONS) {
+    String resp = http.getString();
+    http.end();
+    
+    Serial.println("Task initiated:");
+    Serial.println(resp);
+    
+    // OpenWebUI returns task_id and streams via WebSocket
+    // Poll chat history until assistant response appears
+    Serial.println("Polling chat history for completion (OpenWebUI uses WebSocket streaming)...");
+    
+    HTTPClient fetchHttp;
+    WiFiClientSecure fetchClient;
+    fetchClient.setInsecure();
+    
+    String fetchUrl = String(OWUI_BASE_URL) + "/api/v1/chats/" + currentChatId;
+    unsigned long pollStart = millis();
+    int pollAttempt = 0;
+    
+    while (millis() - pollStart < 60000) { // 60 second timeout
+      pollAttempt++;
+      delay(2000); // Poll every 2 seconds
+      
+      Serial.printf("[POLL #%d] Fetching chat history...\n", pollAttempt);
+      
+      fetchHttp.begin(fetchClient, fetchUrl);
+      fetchHttp.addHeader("Authorization", String("Bearer ") + LLM_API_KEY);
+      
+      int fetchCode = fetchHttp.GET();
+      String chatData = fetchHttp.getString();
+      fetchHttp.end();
+      
+      if (fetchCode == 200) {
+        // Check if assistant message exists in history
+        int msgIdx = chatData.indexOf("\"" + assistantMsgId + "\"");
+        
+        if (msgIdx >= 0) {
+          Serial.printf("Found assistant message after %d polls\n", pollAttempt);
+          
+          // Find the content field after this message ID
+          int contentIdx = chatData.indexOf("\"content\"", msgIdx);
+          if (contentIdx >= 0) {
+            int start = chatData.indexOf('"', contentIdx + 9);
+            if (start >= 0) {
+              start++;
+              bool esc = false;
+              for (unsigned int i = start; i < chatData.length(); i++) {
+                char c = chatData[i];
+                if (esc) {
+                  if (c == 'n') result += '\n';
+                  else if (c == 't') result += '\t';
+                  else result += c;
+                  esc = false;
+                } else if (c == '\\') {
+                  esc = true;
+                } else if (c == '"') {
+                  break;
+                } else {
+                  result += c;
+                }
+              }
+            }
+          }
+          
+          if (result.length() > 0) {
+            Serial.printf("Retrieved response length: %d\n", result.length());
+            break;
+          }
+        } else {
+          Serial.println("Assistant message not ready yet...");
+        }
+      } else {
+        Serial.printf("Fetch failed: HTTP %d\n", fetchCode);
+      }
+    }
+    
+    if (result.length() == 0) {
+      Serial.printf("ERROR: No response after %d polls\n", pollAttempt);
+      return "Timeout";
+    }
+  } else {
+    // Non-streaming response for OpenAI APIs
+    String resp = http.getString();
+    http.end();
+    
+    Serial.println("LLM response:");
+    Serial.println(resp);
   
-  if (LLM_USE_RESPONSES_API) {
+    if (LLM_USE_RESPONSES_API) {
     // Parse OpenAI Responses API format
     int outIdx = resp.indexOf("output_text");
     if (outIdx < 0) {
@@ -433,11 +916,21 @@ String askGPT(const String &question) {
         result += c;
       }
     }
+    }
   }
 
   Serial.println("Extracted answer: " + result);
   Serial.println("=================================\n");
 
+  // Steps 5 & 6: Call completed handler and save full chat history for OpenWebUI
+  if (USE_OWUI_SESSIONS && currentChatId.length() > 0 && userMsgId.length() > 0) {
+    // Step 5: Call completed handler
+    chatCompleted(currentChatId, currentSessionId, userMsgId, question, assistantMsgId, result);
+    
+    // Step 6: Save full conversation history
+    saveChatHistory(currentChatId, userMsgId, question, assistantMsgId, result);
+  }
+  
   return result;
 }
 
@@ -514,6 +1007,22 @@ void setup() {
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
   Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
+
+  // Sync time with NTP for accurate Unix timestamps
+  Serial.println("Syncing time with NTP...");
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  int ntpRetry = 0;
+  while (time(nullptr) < 100000 && ntpRetry < 20) {
+    delay(500);
+    Serial.print(".");
+    ntpRetry++;
+  }
+  Serial.println();
+  if (time(nullptr) > 100000) {
+    Serial.printf("Time synced: %lu\n", getUnixTimestamp());
+  } else {
+    Serial.println("WARNING: NTP sync failed, timestamps will be inaccurate");
+  }
 
   // Pre-allocate audio buffer
   audioBuffer = (int16_t *)malloc(RECORD_SAMPLES * sizeof(int16_t));
