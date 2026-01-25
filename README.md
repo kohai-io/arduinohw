@@ -11,11 +11,23 @@ Transform your M5StickCPlus2 into an intelligent voice assistant with OpenWebUI 
 - **Visual Feedback:** Real-time status updates on device display
 
 ### 💬 OpenWebUI Integration
+
+This project integrates with [OpenWebUI](https://openwebui.com), an extensible, self-hosted WebUI for LLMs.
+
 - **Session Tracking:** Maintains persistent chat sessions in OpenWebUI
 - **Conversation Threading:** Linear message chains with proper parent-child relationships
 - **Full Context:** LLM sees entire conversation history for contextual responses
 - **Graceful Recovery:** Automatically handles deleted sessions and creates new ones
 - **New Chat Sessions:** Press Button B to start a fresh conversation
+
+**Custom Models/Agents:**
+The `LLM_MODEL` setting can reference any model configured in your OpenWebUI instance, including:
+- Standard LLM models (GPT-4, Claude, Llama, etc.)
+- **Custom Agents** with specialized system prompts
+- **RAG-enabled Models** with knowledge base documents
+- **Tool-equipped Agents** with function calling capabilities
+
+This allows you to create domain-specific assistants in OpenWebUI (e.g., a technical support agent with your product documentation, or a cooking assistant with recipe knowledge) and access them directly from your M5StickCPlus2 by simply setting the agent/model name in `secrets.h`.
 
 ### ⚙️ Configurable Settings
 - Custom system prompts
