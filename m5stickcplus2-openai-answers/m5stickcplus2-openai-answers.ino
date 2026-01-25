@@ -416,6 +416,114 @@ bool updateChatWithUserMessage(const String &chatId, const String &userMsgId, co
   client.setInsecure();
   
   String url = String(OWUI_BASE_URL) + "/api/v1/chats/" + chatId;
+  
+  // First, fetch existing chat to get current history
+  Serial.println("Fetching existing chat history...");
+  http.begin(client, url);
+  http.addHeader("Authorization", String("Bearer ") + LLM_API_KEY);
+  
+  int getCode = http.GET();
+  String existingChat = http.getString();
+  http.end();
+  
+  if (getCode == 401 || getCode == 404) {
+    Serial.println("Chat session no longer exists (deleted or invalid)");
+    Serial.println("===================================================\n");
+    currentChatId = "";
+    return false;
+  }
+  
+  if (getCode != 200) {
+    Serial.printf("ERROR: Failed to fetch chat (HTTP %d)\n", getCode);
+    Serial.println("===================================================\n");
+    return false;
+  }
+  
+  // Extract currentId (last message ID) from history
+  String previousMsgId = "";
+  int historyIdx = existingChat.indexOf("\"history\"");
+  if (historyIdx >= 0) {
+    int currentIdIdx = existingChat.indexOf("\"currentId\"", historyIdx);
+    if (currentIdIdx >= 0) {
+      // Check if currentId is null (JSON null, not quoted string)
+      int colonIdx = existingChat.indexOf(':', currentIdIdx);
+      if (colonIdx >= 0) {
+        // Skip whitespace after colon
+        int checkIdx = colonIdx + 1;
+        while (checkIdx < (int)existingChat.length() && 
+               (existingChat[checkIdx] == ' ' || existingChat[checkIdx] == '\t')) {
+          checkIdx++;
+        }
+        // Check if it's null (not quoted)
+        if (existingChat.substring(checkIdx, checkIdx + 4) != "null") {
+          // It's a quoted string, extract it
+          int start = existingChat.indexOf('"', currentIdIdx + 12);
+          if (start >= 0) {
+            start++;
+            int end = existingChat.indexOf('"', start);
+            if (end >= 0) {
+              previousMsgId = existingChat.substring(start, end);
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  Serial.printf("Previous message ID: %s\n", previousMsgId.length() > 0 ? previousMsgId.c_str() : "none (new chat)");
+  
+  // Extract existing messages from history.messages
+  String existingMessages = "";
+  if (historyIdx >= 0) {
+    int messagesIdx = existingChat.indexOf("\"messages\"", historyIdx);
+    if (messagesIdx >= 0) {
+      int openBrace = existingChat.indexOf('{', messagesIdx + 10);
+      if (openBrace >= 0) {
+        int braceCount = 1;
+        int start = openBrace + 1;
+        for (unsigned int i = start; i < existingChat.length(); i++) {
+          if (existingChat[i] == '{') braceCount++;
+          else if (existingChat[i] == '}') {
+            braceCount--;
+            if (braceCount == 0) {
+              existingMessages = existingChat.substring(start, i);
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  Serial.printf("Existing messages length: %d\n", existingMessages.length());
+  
+  // Update previous message to add new message as child
+  if (previousMsgId.length() > 0 && existingMessages.length() > 0) {
+    // Find and update the previous message's childrenIds
+    int prevMsgIdx = existingMessages.indexOf("\"" + previousMsgId + "\"");
+    if (prevMsgIdx >= 0) {
+      int childrenIdx = existingMessages.indexOf("\"childrenIds\"", prevMsgIdx);
+      if (childrenIdx >= 0) {
+        int arrayStart = existingMessages.indexOf('[', childrenIdx);
+        int arrayEnd = existingMessages.indexOf(']', arrayStart);
+        if (arrayStart >= 0 && arrayEnd >= 0) {
+          String existingChildren = existingMessages.substring(arrayStart + 1, arrayEnd);
+          String newChildren = existingChildren;
+          if (newChildren.length() > 0) {
+            newChildren += ",";
+          }
+          newChildren += "\"" + userMsgId + "\"";
+          
+          // Replace the childrenIds array
+          existingMessages = existingMessages.substring(0, arrayStart + 1) + 
+                           newChildren + 
+                           existingMessages.substring(arrayEnd);
+        }
+      }
+    }
+  }
+  
+  // Now update with new user message appended to existing
   Serial.printf("Updating chat at: %s\n", url.c_str());
   
   http.begin(client, url);
@@ -423,27 +531,40 @@ bool updateChatWithUserMessage(const String &chatId, const String &userMsgId, co
   http.addHeader("Authorization", String("Bearer ") + LLM_API_KEY);
   http.setTimeout(30000);
   
-  unsigned long timestamp = getUnixTimestamp(); // Unix epoch in seconds
+  unsigned long timestamp = getUnixTimestamp();
   
   String escapedContent = userContent;
   escapedContent.replace("\\", "\\\\");
   escapedContent.replace("\"", "\\\"");
   escapedContent.replace("\n", "\\n");
   
+  // Build new message entry with proper parent linking
+  String parentIdField = previousMsgId.length() > 0 ? 
+                        ("\"" + previousMsgId + "\"") : "null";
+  
+  String newMessage = "\"" + userMsgId + "\":{"
+                      "\"id\":\"" + userMsgId + "\","
+                      "\"parentId\":" + parentIdField + ","
+                      "\"childrenIds\":[],"
+                      "\"role\":\"user\","
+                      "\"content\":\"" + escapedContent + "\","
+                      "\"timestamp\":" + String(timestamp) + ","
+                      "\"models\":[\"" + String(LLM_MODEL) + "\"]"
+                      "}";
+  
+  // Merge existing and new messages
+  String allMessages = existingMessages;
+  if (allMessages.length() > 0) {
+    allMessages += ",";
+  }
+  allMessages += newMessage;
+  
   String body = "{"
                 "\"chat\":{"
                 "\"title\":\"M5 Voice Assistant\","
                 "\"history\":{"
                 "\"messages\":{"
-                "\"" + userMsgId + "\":{"
-                "\"id\":\"" + userMsgId + "\","
-                "\"parentId\":null,"
-                "\"childrenIds\":[],"
-                "\"role\":\"user\","
-                "\"content\":\"" + escapedContent + "\","
-                "\"timestamp\":" + String(timestamp) + ","
-                "\"models\":[\"" + String(LLM_MODEL) + "\"]"
-                "}"
+                + allMessages +
                 "},"
                 "\"currentId\":\"" + userMsgId + "\""
                 "},"
@@ -468,6 +589,11 @@ bool updateChatWithUserMessage(const String &chatId, const String &userMsgId, co
     Serial.println("User message saved successfully");
     Serial.println("===================================================\n");
     return true;
+  } else if (httpCode == 401 || httpCode == 404) {
+    Serial.println("Chat session no longer exists (deleted or invalid)");
+    Serial.println("===================================================\n");
+    currentChatId = "";
+    return false;
   } else {
     Serial.println("Error saving user message:");
     Serial.println(resp);
@@ -551,52 +677,113 @@ bool saveChatHistory(const String &chatId, const String &userMsgId, const String
   client.setInsecure();
   
   String url = String(OWUI_BASE_URL) + "/api/v1/chats/" + chatId;
-  Serial.printf("Saving to: %s\n", url.c_str());
   
+  // Fetch existing chat history first
+  Serial.println("Fetching existing chat history...");
   http.begin(client, url);
-  http.addHeader("Content-Type", "application/json");
   http.addHeader("Authorization", String("Bearer ") + LLM_API_KEY);
-  http.setTimeout(30000);
   
-  // Get current timestamp in seconds
+  int getCode = http.GET();
+  String existingChat = http.getString();
+  http.end();
+  
+  if (getCode != 200) {
+    Serial.printf("ERROR: Failed to fetch chat (HTTP %d)\n", getCode);
+    Serial.println("=========================================\n");
+    return false;
+  }
+  
+  // Extract existing messages from history.messages
+  String existingMessages = "";
+  int historyIdx = existingChat.indexOf("\"history\"");
+  if (historyIdx >= 0) {
+    int messagesIdx = existingChat.indexOf("\"messages\"", historyIdx);
+    if (messagesIdx >= 0) {
+      int openBrace = existingChat.indexOf('{', messagesIdx + 10);
+      if (openBrace >= 0) {
+        int braceCount = 1;
+        int start = openBrace + 1;
+        for (unsigned int i = start; i < existingChat.length(); i++) {
+          if (existingChat[i] == '{') braceCount++;
+          else if (existingChat[i] == '}') {
+            braceCount--;
+            if (braceCount == 0) {
+              existingMessages = existingChat.substring(start, i);
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  Serial.printf("Existing messages length: %d\n", existingMessages.length());
+  
+  // Update the user message to add assistant as child
+  if (existingMessages.length() > 0) {
+    int userMsgIdx = existingMessages.indexOf("\"" + userMsgId + "\"");
+    if (userMsgIdx >= 0) {
+      int childrenIdx = existingMessages.indexOf("\"childrenIds\"", userMsgIdx);
+      if (childrenIdx >= 0) {
+        int arrayStart = existingMessages.indexOf('[', childrenIdx);
+        int arrayEnd = existingMessages.indexOf(']', arrayStart);
+        if (arrayStart >= 0 && arrayEnd >= 0) {
+          String existingChildren = existingMessages.substring(arrayStart + 1, arrayEnd);
+          String newChildren = existingChildren;
+          if (newChildren.length() > 0 && !newChildren.equals("")) {
+            newChildren += ",";
+          }
+          newChildren += "\"" + assistantMsgId + "\"";
+          
+          // Replace the childrenIds array
+          existingMessages = existingMessages.substring(0, arrayStart + 1) + 
+                           newChildren + 
+                           existingMessages.substring(arrayEnd);
+        }
+      }
+    }
+  }
+  
+  // Get current timestamp
   unsigned long timestamp = getUnixTimestamp();
   
-  // Escape content for JSON
-  String escapedUser = userContent;
-  escapedUser.replace("\\", "\\\\");
-  escapedUser.replace("\"", "\\\"");
-  escapedUser.replace("\n", "\\n");
-  
+  // Escape assistant content for JSON
   String escapedAssistant = assistantContent;
   escapedAssistant.replace("\\", "\\\\");
   escapedAssistant.replace("\"", "\\\"");
   escapedAssistant.replace("\n", "\\n");
   
-  // Build chat history JSON with full structure (Step 6)
+  // Build only the assistant message (user message already exists)
+  String newMessage = "\"" + assistantMsgId + "\":{"
+                      "\"id\":\"" + assistantMsgId + "\","
+                      "\"parentId\":\"" + userMsgId + "\","
+                      "\"childrenIds\":[],"
+                      "\"role\":\"assistant\","
+                      "\"content\":\"" + escapedAssistant + "\","
+                      "\"model\":\"" + String(LLM_MODEL) + "\","
+                      "\"timestamp\":" + String(timestamp) + ","
+                      "\"done\":true"
+                      "}";
+  
+  // Merge existing and new assistant message
+  String allMessages = existingMessages;
+  if (allMessages.length() > 0) {
+    allMessages += ",";
+  }
+  allMessages += newMessage;
+  
+  // Escape user content for messages array
+  String escapedUser = userContent;
+  escapedUser.replace("\\", "\\\\");
+  escapedUser.replace("\"", "\\\"");
+  escapedUser.replace("\n", "\\n");
+  
   String body = "{"
                 "\"chat\":{"
                 "\"title\":\"M5 Voice Assistant\","
                 "\"history\":{"
                 "\"messages\":{"
-                "\"" + userMsgId + "\":{"
-                "\"id\":\"" + userMsgId + "\","
-                "\"parentId\":null,"
-                "\"childrenIds\":[\"" + assistantMsgId + "\"],"
-                "\"role\":\"user\","
-                "\"content\":\"" + escapedUser + "\","
-                "\"timestamp\":" + String(timestamp) + ","
-                "\"models\":[\"" + String(LLM_MODEL) + "\"]"
-                "},"
-                "\"" + assistantMsgId + "\":{"
-                "\"id\":\"" + assistantMsgId + "\","
-                "\"parentId\":\"" + userMsgId + "\","
-                "\"childrenIds\":[],"
-                "\"role\":\"assistant\","
-                "\"content\":\"" + escapedAssistant + "\","
-                "\"model\":\"" + String(LLM_MODEL) + "\","
-                "\"timestamp\":" + String(timestamp + 5) + ","
-                "\"done\":true"
-                "}"
+                + allMessages +
                 "},"
                 "\"currentId\":\"" + assistantMsgId + "\""
                 "},"
@@ -616,6 +803,12 @@ bool saveChatHistory(const String &chatId, const String &userMsgId, const String
                 "}";
   
   Serial.println("Saving history...");
+  
+  http.begin(client, url);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Authorization", String("Bearer ") + LLM_API_KEY);
+  http.setTimeout(30000);
+  
   int httpCode = http.POST(body);
   Serial.printf("HTTP response code: %d\n", httpCode);
   
@@ -659,14 +852,134 @@ String askGPT(const String &question) {
     
     // Step 3: Update chat with user message before completion
     if (!updateChatWithUserMessage(currentChatId, userMsgId, question)) {
-      Serial.println("ERROR: Failed to update chat with user message!");
-      return "Update error";
+      // Check if chat was deleted (currentChatId cleared by updateChatWithUserMessage)
+      if (currentChatId.length() == 0) {
+        Serial.println("Chat was deleted, creating new session and retrying...");
+        currentChatId = createChatSession("M5 Voice Assistant");
+        currentSessionId = generateUUID();
+        if (currentChatId.length() > 0) {
+          // Retry with new session
+          if (!updateChatWithUserMessage(currentChatId, userMsgId, question)) {
+            Serial.println("ERROR: Failed to update chat even after recreating!");
+            return "Update error";
+          }
+        } else {
+          Serial.println("ERROR: Failed to recreate chat session!");
+          return "Session error";
+        }
+      } else {
+        Serial.println("ERROR: Failed to update chat with user message!");
+        return "Update error";
+      }
     }
   }
 
   HTTPClient http;
   WiFiClientSecure client;
   client.setInsecure();
+
+  // Build messages array with full conversation history for context
+  String messagesArray = "";
+  if (USE_OWUI_SESSIONS) {
+    // Fetch chat history to get all messages including current user message
+    // (already saved by updateChatWithUserMessage)
+    String chatUrl = String(OWUI_BASE_URL) + "/api/v1/chats/" + currentChatId;
+    Serial.println("Fetching chat history for context...");
+    
+    http.begin(client, chatUrl);
+    http.addHeader("Authorization", String("Bearer ") + LLM_API_KEY);
+    
+    int getCode = http.GET();
+    String chatData = http.getString();
+    http.end();
+    
+    if (getCode == 200) {
+      // Parse messages from history and build messages array
+      // Find history.messages object
+      int historyIdx = chatData.indexOf("\"history\"");
+      if (historyIdx >= 0) {
+        int messagesIdx = chatData.indexOf("\"messages\"", historyIdx);
+        if (messagesIdx >= 0) {
+          // Extract each message ID and build in chronological order
+          // For simplicity, we'll traverse the tree from root to leaves
+          int msgStart = messagesIdx;
+          while (true) {
+            // Find next message with role "user" or "assistant"
+            int roleIdx = chatData.indexOf("\"role\":", msgStart);
+            if (roleIdx < 0 || roleIdx > chatData.indexOf("\"currentId\"", historyIdx)) break;
+            
+            int roleStart = chatData.indexOf('"', roleIdx + 7);
+            if (roleStart < 0) break;
+            roleStart++;
+            int roleEnd = chatData.indexOf('"', roleStart);
+            String role = chatData.substring(roleStart, roleEnd);
+            
+            // Get content
+            int contentIdx = chatData.indexOf("\"content\":", roleIdx);
+            if (contentIdx > 0) {
+              int contentStart = chatData.indexOf('"', contentIdx + 10);
+              if (contentStart >= 0) {
+                contentStart++;
+                String content = "";
+                bool esc = false;
+                for (unsigned int i = contentStart; i < chatData.length(); i++) {
+                  char c = chatData[i];
+                  if (esc) {
+                    if (c == 'n') content += '\n';
+                    else if (c == 't') content += '\t';
+                    else content += c;
+                    esc = false;
+                  } else if (c == '\\') {
+                    esc = true;
+                  } else if (c == '"') {
+                    break;
+                  } else {
+                    content += c;
+                  }
+                }
+                
+                // Escape for JSON
+                content.replace("\\", "\\\\");
+                content.replace("\"", "\\\"");
+                content.replace("\n", "\\n");
+                
+                // Add system prompt only to the last user message
+                if (role == "user") {
+                  // Check if this is the last message by looking ahead
+                  int nextRoleIdx = chatData.indexOf("\"role\":", roleIdx + 1);
+                  bool isLastUserMsg = (nextRoleIdx < 0 || nextRoleIdx > chatData.indexOf("\"currentId\"", historyIdx));
+                  if (isLastUserMsg) {
+                    content += String(LLM_SYSTEM_PROMPT);
+                  }
+                }
+                
+                // Add to messages array
+                if (messagesArray.length() > 0) messagesArray += ",";
+                messagesArray += "{\"role\":\"" + role + "\",\"content\":\"" + content + "\"}";
+              }
+            }
+            
+            msgStart = roleIdx + 1;
+          }
+        }
+      }
+      Serial.printf("Built context with history messages\n");
+    }
+  } else {
+    // Non-OpenWebUI: build single message manually
+    String escaped = question;
+    escaped.replace("\\", "\\\\");
+    escaped.replace("\"", "\\\"");
+    escaped.replace("\n", " ");
+    
+    messagesArray = "{\"role\":\"user\",\"content\":\"" + escaped + String(LLM_SYSTEM_PROMPT) + "\"}";
+  }
+
+  // Escape question for non-OpenWebUI API formats
+  String escaped = question;
+  escaped.replace("\\", "\\\\");
+  escaped.replace("\"", "\\\"");
+  escaped.replace("\n", " ");
 
   String url;
   if (USE_OWUI_SESSIONS) {
@@ -680,11 +993,6 @@ String askGPT(const String &question) {
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Authorization", String("Bearer ") + LLM_API_KEY);
   http.setTimeout(90000);
-
-  String escaped = question;
-  escaped.replace("\\", "\\\\");
-  escaped.replace("\"", "\\\"");
-  escaped.replace("\n", " ");
 
   String body;
   if (LLM_USE_RESPONSES_API) {
@@ -706,17 +1014,10 @@ String askGPT(const String &question) {
            "]"
            "}";
   } else if (USE_OWUI_SESSIONS) {
-    // Step 4: OpenWebUI with chat session tracking
+    // Step 4: OpenWebUI with chat session tracking and full context
     body = "{"
            "\"model\":\"" + String(LLM_MODEL) + "\","
-           "\"messages\":["
-           "{"
-           "\"role\":\"user\","
-           "\"content\":\"" +
-           escaped +
-           String(LLM_SYSTEM_PROMPT) + "\""
-           "}"
-           "],"
+           "\"messages\":[" + messagesArray + "],"
            "\"chat_id\":\"" + currentChatId + "\","
            "\"id\":\"" + assistantMsgId + "\","
            "\"session_id\":\"" + currentSessionId + "\","
@@ -1010,7 +1311,7 @@ void setup() {
 
   // Sync time with NTP for accurate Unix timestamps
   Serial.println("Syncing time with NTP...");
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  configTime(0, 0, NTP_SERVER_1, NTP_SERVER_2);
   int ntpRetry = 0;
   while (time(nullptr) < 100000 && ntpRetry < 20) {
     delay(500);
@@ -1083,9 +1384,19 @@ void loop() {
     Serial.println("\n*** INTERACTION COMPLETE ***\n");
   }
 
-  // Button B returns to home screen
+  // Button B starts a new chat session
   if (M5.BtnB.wasClicked()) {
-    Serial.println("Button B pressed - returning to home screen");
+    Serial.println("Button B pressed - starting new chat session");
+    
+    if (USE_OWUI_SESSIONS) {
+      // Clear current session to start fresh
+      currentChatId = "";
+      currentSessionId = "";
+      Serial.println("Chat session cleared - next interaction will create new chat");
+      drawScreen("New Chat\nStarted");
+      delay(1500);
+    }
+    
     drawScreen("Press A\nto ask a question");
   }
 

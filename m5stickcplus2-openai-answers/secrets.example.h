@@ -38,6 +38,10 @@ const char *LLM_SYSTEM_PROMPT = " Answer in 20 words or less.";
 const bool USE_OWUI_SESSIONS = true;  // Enable for OpenWebUI chat history
 const char *OWUI_BASE_URL = "http://your-openwebui-host:8080";  // Base URL for OpenWebUI
 
+// NTP Time Servers (for accurate Unix timestamps)
+const char *NTP_SERVER_1 = "pool.ntp.org";
+const char *NTP_SERVER_2 = "time.nist.gov";
+
 // Example OpenWebUI configuration:
 // const bool USE_OWUI_SESSIONS = true;
 // const bool LLM_USE_RESPONSES_API = false;
