@@ -1,9 +1,8 @@
 #ifndef NETWORK_H
 #define NETWORK_H
 
-#include <MP3DecoderHelix.h>
-
-using namespace libhelix;
+// Pure declarations only - no includes to avoid conflicts
+// MP3DecoderHelix types used in main .ino file
 
 // External references
 extern int SAMPLE_RATE;
@@ -36,7 +35,6 @@ extern String currentSessionId;
 String generateUUID();
 unsigned long getUnixTimestamp();
 unsigned long long getUnixTimestampMs();
-void ttsAudioCallback(MP3FrameInfo &info, short *pwm_buffer, size_t len, void *ref);
 
 void speakText(const String &text);
 void replayTts();

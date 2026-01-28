@@ -1,7 +1,7 @@
 #ifndef M5GO_LEDS_H
 #define M5GO_LEDS_H
 
-#include <FastLED.h>
+// Note: FastLED.h must be included before this header in the main .ino file
 
 // M5GO-Bottom2 LED configuration
 #define M5GO_NUM_LEDS 10

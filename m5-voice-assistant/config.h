@@ -1,7 +1,7 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#include <M5Unified.h>
+// Note: M5Unified.h must be included before this header in the main .ino file
 
 // Audio quality profiles
 struct AudioProfile {

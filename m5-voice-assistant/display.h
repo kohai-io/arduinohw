@@ -1,7 +1,7 @@
 #ifndef DISPLAY_H
 #define DISPLAY_H
 
-#include <M5Unified.h>
+// Note: M5Unified.h must be included before this header in the main .ino file
 
 // External references
 extern int WIDTH;
