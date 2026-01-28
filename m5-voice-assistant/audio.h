@@ -1,8 +1,7 @@
 #ifndef AUDIO_H
 #define AUDIO_H
 
-#include <M5Unified.h>
-#include "m5go_leds.h"
+// Dependencies: M5Unified.h and m5go_leds.h must be included before this file
 
 // External references
 extern int SAMPLE_RATE;

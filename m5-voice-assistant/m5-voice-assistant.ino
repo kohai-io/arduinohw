@@ -1,8 +1,9 @@
 #include "secrets.h"
-#include <HTTPClient.h>
 #include <M5Unified.h>
+#include <Network.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <HTTPClient.h>
 #include <time.h>
 
 // MP3 decoding for TTS (Core2/CoreS3 only) - uses arduino-libhelix
@@ -12,6 +13,10 @@ using namespace libhelix;
 // Modular includes
 #include "config.h"
 #include "m5go_leds.h"
+
+// Forward declarations for display.h
+extern bool audioLevelInitialized;
+
 #include "display.h"
 #include "audio.h"
 #include "network.h"
