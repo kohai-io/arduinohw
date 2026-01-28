@@ -9,9 +9,18 @@
 #include <MP3DecoderHelix.h>
 using namespace libhelix;
 
+// FastLED for M5GO-Bottom2 LED control
+#include <FastLED.h>
+
 // Display dimensions - set dynamically in setup()
 static int WIDTH = 240;
 static int HEIGHT = 135;
+
+// M5GO-Bottom2 LED configuration
+#define M5GO_NUM_LEDS 10
+#define M5GO_DATA_PIN 25
+CRGB leds[M5GO_NUM_LEDS];
+static bool hasM5GOBottom2 = false;
 
 // Credentials are now in secrets.h
 
@@ -48,6 +57,97 @@ static int currentProfileIndex = 0;
 static bool isLargeDevice = false; // Core2/CoreS3 vs StickC
 static int numProfiles = 2;
 static const AudioProfile* deviceProfiles = STICK_PROFILES;
+
+// M5GO-Bottom2 LED control functions
+void detectM5GOBottom2() {
+  if (!isLargeDevice) {
+    hasM5GOBottom2 = false;
+    return;
+  }
+  
+  // Try to initialize FastLED on GPIO25
+  FastLED.addLeds<NEOPIXEL, M5GO_DATA_PIN>(leds, M5GO_NUM_LEDS);
+  FastLED.setBrightness(50);
+  
+  // Test pattern - flash all LEDs briefly
+  fill_solid(leds, M5GO_NUM_LEDS, CRGB::Blue);
+  FastLED.show();
+  delay(100);
+  fill_solid(leds, M5GO_NUM_LEDS, CRGB::Black);
+  FastLED.show();
+  
+  hasM5GOBottom2 = true;
+  Serial.println("M5GO-Bottom2 detected and initialized");
+}
+
+void setM5GOLEDs(CRGB color) {
+  if (!hasM5GOBottom2) return;
+  fill_solid(leds, M5GO_NUM_LEDS, color);
+  FastLED.show();
+}
+
+void setM5GOLEDsPattern(int activeLeds, CRGB color) {
+  if (!hasM5GOBottom2) return;
+  for (int i = 0; i < M5GO_NUM_LEDS; i++) {
+    leds[i] = (i < activeLeds) ? color : CRGB::Black;
+  }
+  FastLED.show();
+}
+
+void pulseM5GOLEDs(CRGB color, int delayMs = 50) {
+  if (!hasM5GOBottom2) return;
+  
+  // Pulse from center outward
+  for (int i = 0; i < 5; i++) {
+    leds[4 - i] = color;
+    leds[5 + i] = color;
+    FastLED.show();
+    delay(delayMs);
+  }
+  
+  delay(delayMs);
+  
+  // Fade out
+  for (int i = 4; i >= 0; i--) {
+    leds[4 - i] = CRGB::Black;
+    leds[5 + i] = CRGB::Black;
+    FastLED.show();
+    delay(delayMs);
+  }
+}
+
+void breatheM5GOLEDs(CRGB color, int cycles = 1) {
+  if (!hasM5GOBottom2) return;
+  
+  for (int c = 0; c < cycles; c++) {
+    // Breathe in
+    for (int brightness = 0; brightness <= 255; brightness += 5) {
+      CRGB dimColor = color;
+      dimColor.nscale8(brightness);
+      fill_solid(leds, M5GO_NUM_LEDS, dimColor);
+      FastLED.show();
+      delay(10);
+    }
+    
+    // Breathe out
+    for (int brightness = 255; brightness >= 0; brightness -= 5) {
+      CRGB dimColor = color;
+      dimColor.nscale8(brightness);
+      fill_solid(leds, M5GO_NUM_LEDS, dimColor);
+      FastLED.show();
+      delay(10);
+    }
+  }
+  
+  fill_solid(leds, M5GO_NUM_LEDS, CRGB::Black);
+  FastLED.show();
+}
+
+void clearM5GOLEDs() {
+  if (!hasM5GOBottom2) return;
+  fill_solid(leds, M5GO_NUM_LEDS, CRGB::Black);
+  FastLED.show();
+}
 
 // Dynamic system prompt (built based on device type)
 static int currentMaxWords = 20;
@@ -529,6 +629,11 @@ bool recordAudio() {
   currentRmsLevel = 0;
   audioLevelInitialized = false; // Reset so display initializes fresh
   
+  // Initialize M5GO LEDs for recording
+  if (hasM5GOBottom2) {
+    setM5GOLEDs(CRGB::Blue); // Blue = ready to listen
+  }
+  
   // Create display task on core 0 (main loop runs on core 1)
   if (displayTaskHandle == NULL) {
     xTaskCreatePinnedToCore(displayTask, "displayTask", 4096, NULL, 1, &displayTaskHandle, 0);
@@ -556,6 +661,18 @@ bool recordAudio() {
         sum += (int64_t)sample * sample;
       }
       currentRmsLevel = (int)sqrt(sum / SAMPLES_PER_CHUNK);
+      
+      // Update M5GO LEDs based on audio level
+      if (hasM5GOBottom2) {
+        int activeLeds = map(constrain(currentRmsLevel, 0, 3000), 0, 3000, 0, M5GO_NUM_LEDS);
+        if (currentRmsLevel >= VAD_SILENCE_THRESHOLD) {
+          // Speaking detected - green LEDs
+          setM5GOLEDsPattern(activeLeds, CRGB::Green);
+        } else {
+          // Silence - dim blue LEDs
+          setM5GOLEDsPattern(2, CRGB::Blue);
+        }
+      }
     }
     
     // Update countdown
@@ -585,6 +702,9 @@ bool recordAudio() {
   // Stop recording
   isRecording = false;
   M5.Mic.end();
+  
+  // Clear M5GO LEDs
+  clearM5GOLEDs();
   
   // Update actual recorded samples for transcription
   actualRecordedSamples = totalSamplesRecorded;
@@ -1883,6 +2003,9 @@ void setup() {
   applyAudioProfile(0);
   buildSystemPrompt();
   Serial.printf("Free heap: %d bytes\n", freeHeap);
+  
+  // Detect M5GO-Bottom2 after device type is determined
+  detectM5GOBottom2();
 
   drawScreen("Connecting...");
 
@@ -1894,6 +2017,14 @@ void setup() {
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
+    
+    // Pulse LEDs while connecting
+    if (hasM5GOBottom2 && attempt % 2 == 0) {
+      setM5GOLEDs(CRGB::Yellow);
+    } else if (hasM5GOBottom2) {
+      clearM5GOLEDs();
+    }
+    
     attempt++;
     if (attempt % 10 == 0) {
       Serial.printf("\nWiFi Status: %d\n", WiFi.status());
@@ -1904,6 +2035,13 @@ void setup() {
   }
 
   Serial.println("\nWiFi connected!");
+  
+  // WiFi connected - brief green flash
+  if (hasM5GOBottom2) {
+    setM5GOLEDs(CRGB::Green);
+    delay(500);
+    clearM5GOLEDs();
+  }
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
   Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
@@ -1954,6 +2092,12 @@ void loop() {
     Serial.printf("Free heap after recording: %d bytes\n", ESP.getFreeHeap());
 
     drawScreen("Transcribing...");
+    
+    // LED: Cyan pulse during transcription
+    if (hasM5GOBottom2) {
+      breatheM5GOLEDs(CRGB::Cyan, 1);
+    }
+    
     String question = transcribeAudio();
 
     if (question.length() < 2 || question.startsWith("No ") ||
@@ -1967,7 +2111,16 @@ void loop() {
     }
 
     drawScreen("Thinking...");
+    
+    // LED: Purple/Magenta during AI thinking
+    if (hasM5GOBottom2) {
+      setM5GOLEDs(CRGB::Purple);
+    }
+    
     String answer = askGPT(question);
+    
+    // Clear LEDs after response
+    clearM5GOLEDs();
 
     // Adjust wrap width based on screen size (Core 2 is wider)
     int wrapChars = (WIDTH >= 320) ? 35 : 25;
@@ -1978,7 +2131,15 @@ void loop() {
 
     // Speak the response on Core2/CoreS3 (devices with speakers)
     if (USE_TTS && isLargeDevice) {
+      // LED: Orange during TTS playback
+      if (hasM5GOBottom2) {
+        setM5GOLEDs(CRGB::Orange);
+      }
+      
       speakText(answer);
+      
+      // Clear LEDs after speaking
+      clearM5GOLEDs();
     }
 
     Serial.printf("Free heap at end: %d bytes\n", ESP.getFreeHeap());
