@@ -1,5 +1,5 @@
-#ifndef NETWORK_H
-#define NETWORK_H
+#ifndef API_FUNCTIONS_H
+#define API_FUNCTIONS_H
 
 // Pure declarations only - no includes to avoid conflicts
 // MP3DecoderHelix types used in main .ino file
@@ -47,4 +47,4 @@ bool chatCompleted(const String &chatId, const String &sessionId, const String &
 bool saveChatHistory(const String &chatId, const String &userMsgId, const String &userContent,
                      const String &assistantMsgId, const String &assistantContent);
 
-#endif // NETWORK_H
+#endif // API_FUNCTIONS_H

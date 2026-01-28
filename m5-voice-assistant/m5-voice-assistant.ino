@@ -21,7 +21,7 @@ extern bool audioLevelInitialized;
 
 #include "display.h"
 #include "audio.h"
-#include "network.h"
+#include "api_functions.h"
 
 // Display dimensions - set dynamically in setup()
 int WIDTH = 240;
