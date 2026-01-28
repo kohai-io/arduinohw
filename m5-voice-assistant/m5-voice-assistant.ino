@@ -39,6 +39,11 @@ const AudioProfile* deviceProfiles = STICK_PROFILES;
 // LED functions now in m5go_leds.h
 // Config functions now in config.h
 
+// Voice Activity Detection (VAD) settings
+const int VAD_SILENCE_THRESHOLD = 500;
+const float VAD_SILENCE_DURATION = 1.5;
+const bool VAD_ENABLED = true;
+
 // Dynamic system prompt
 int currentMaxWords = 20;
 String systemPrompt = "";
@@ -55,20 +60,20 @@ int actualRecordedSamples = RECORD_SAMPLES;
 // Audio profile functions now in config.h
 
 // TTS audio output buffer and state (kept for replay)
-static int16_t* ttsOutputBuffer = nullptr;
-static size_t ttsOutputSize = 0;
-static size_t ttsOutputIndex = 0;
-static int ttsSampleRate = 44100;
-static int ttsChannels = 2;
+int16_t* ttsOutputBuffer = nullptr;
+size_t ttsOutputSize = 0;
+size_t ttsOutputIndex = 0;
+int ttsSampleRate = 44100;
+int ttsChannels = 2;
 
 // Last played TTS for replay on button C
-static int16_t* lastTtsBuffer = nullptr;
-static size_t lastTtsLength = 0;
-static int lastTtsSampleRate = 44100;
-static int lastTtsChannels = 1;
+int16_t* lastTtsBuffer = nullptr;
+size_t lastTtsLength = 0;
+int lastTtsSampleRate = 44100;
+int lastTtsChannels = 1;
 
 // Current TTS voice (toggles between TTS_VOICE_1 and TTS_VOICE_2)
-static bool useTtsVoice1 = true;
+bool useTtsVoice1 = true;
 
 // Callback for libhelix MP3 decoder - receives decoded PCM samples
 void ttsAudioCallback(MP3FrameInfo &info, short *pwm_buffer, size_t len, void *ref) {
@@ -260,12 +265,42 @@ void replayTts() {
   Serial.println("=================================\n");
 }
 
-// Real-time audio display
+// Real-time audio display state
 volatile bool isRecording = false;
 volatile int currentRmsLevel = 0;
 volatile int recordingSecondsLeft = 0;
 TaskHandle_t displayTaskHandle = NULL;
 bool audioLevelInitialized = false;
+
+// Utility functions
+String generateUUID() {
+  String uuid = "";
+  const char* hex = "0123456789abcdef";
+  
+  for (int i = 0; i < 36; i++) {
+    if (i == 8 || i == 13 || i == 18 || i == 23) {
+      uuid += '-';
+    } else if (i == 14) {
+      uuid += '4';
+    } else if (i == 19) {
+      uuid += hex[(esp_random() & 0x3) | 0x8];
+    } else {
+      uuid += hex[esp_random() & 0xF];
+    }
+  }
+  
+  return uuid;
+}
+
+unsigned long getUnixTimestamp() {
+  time_t now;
+  time(&now);
+  return (unsigned long)now;
+}
+
+unsigned long long getUnixTimestampMs() {
+  return (unsigned long long)getUnixTimestamp() * 1000;
+}
 
 // Display and audio functions now in display.h and audio.h
 

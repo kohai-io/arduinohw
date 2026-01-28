@@ -25,10 +25,10 @@ static const AudioProfile CORE_PROFILES[] = {
 
 };
 
-// Voice Activity Detection (VAD) settings
-static const int VAD_SILENCE_THRESHOLD = 500;  // RMS threshold for silence
-static const float VAD_SILENCE_DURATION = 1.5; // Seconds of silence before auto-stop
-static const bool VAD_ENABLED = true;
+// Voice Activity Detection (VAD) settings - defined in main .ino
+// const int VAD_SILENCE_THRESHOLD = 500;
+// const float VAD_SILENCE_DURATION = 1.5;
+// const bool VAD_ENABLED = true;
 
 // Display dimensions - set dynamically in setup()
 extern int WIDTH;

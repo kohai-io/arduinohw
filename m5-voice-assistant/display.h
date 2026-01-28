@@ -17,7 +17,7 @@ extern volatile int recordingSecondsLeft;
 static int lastDisplayedSeconds = -1;
 static int lastDisplayedBars = -1;
 static bool lastSpeakingState = false;
-static bool audioLevelInitialized = false;
+// audioLevelInitialized defined in main .ino
 
 void drawScreen(const String &text) {
   Serial.println("Drawing to screen: " + text);
