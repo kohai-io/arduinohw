@@ -1,5 +1,5 @@
-#ifndef CONFIG_H
-#define CONFIG_H
+#ifndef DEVICE_CONFIG_H
+#define DEVICE_CONFIG_H
 
 // Note: M5Unified.h must be included before this header in the main .ino file
 
@@ -114,4 +114,4 @@ const char* getCurrentProfileName() {
   return deviceProfiles[currentProfileIndex].name;
 }
 
-#endif // CONFIG_H
+#endif // DEVICE_CONFIG_H

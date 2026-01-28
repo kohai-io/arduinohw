@@ -13,7 +13,7 @@ using namespace libhelix;
 #include <FastLED.h>
 
 // Modular includes (must come after system includes)
-#include "config.h"
+#include "device_config.h"
 #include "m5go_leds.h"
 
 // Forward declarations for display.h
