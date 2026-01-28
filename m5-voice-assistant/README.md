@@ -7,7 +7,7 @@ Multi-device voice assistant for M5Stack devices with OpenAI/OpenWebUI integrati
 - **M5StickC Plus2** - Compact voice assistant
 - **M5Stack Core2** - Full-featured with touchscreen and speaker
 - **M5Stack CoreS3** - Latest generation with enhanced features
-- **M5GO-Bottom2** - LED expansion module (Core2/CoreS3 only)
+- **M5GO-Bottom2** - LED expansion module with 10 NeoPixel LEDs (Core2/CoreS3 only)
 
 ## Features
 
@@ -16,6 +16,9 @@ Multi-device voice assistant for M5Stack devices with OpenAI/OpenWebUI integrati
 - 🤖 **LLM Integration** (OpenAI GPT or OpenWebUI models)
 - 🔊 **Text-to-Speech** (Core2/CoreS3 only)
 - 💡 **LED Visual Feedback** (with M5GO-Bottom2)
+  - Real-time audio level visualization during recording
+  - Status indicators for WiFi, transcription, AI thinking, and TTS
+  - Automatic detection and initialization
 - 📊 **Real-time Audio Level Display**
 - 💾 **Chat History** (OpenWebUI sessions)
 - 🎚️ **Multiple Audio Profiles** (quality/duration presets)
@@ -23,30 +26,46 @@ Multi-device voice assistant for M5Stack devices with OpenAI/OpenWebUI integrati
 ## Project Structure
 
 ```
-m5stickcplus2-openai-answers/
-├── m5stickcplus2-openai-answers.ino  # Main application
-├── secrets.h                          # WiFi & API credentials
-├── secrets.example.h                  # Template for credentials
-├── config.h                           # Device detection & profiles
-├── audio.h                            # Recording & WAV generation
-├── display.h                          # Screen rendering & UI
-├── m5go_leds.h                        # LED control (M5GO-Bottom2)
-├── network.h                          # API declarations
-└── README.md                          # This file
+m5-voice-assistant/
+├── m5-voice-assistant.ino  # Main application
+├── secrets.h               # WiFi & API credentials
+├── secrets.example.h       # Template for credentials
+├── device_config.h         # Device detection & profiles
+├── audio.h                 # Recording & WAV generation
+├── display.h               # Screen rendering & UI
+├── m5go_leds.h            # LED control (M5GO-Bottom2)
+├── api_functions.h        # API declarations
+└── README.md              # This file
 ```
 
-## LED Status Indicators (M5GO-Bottom2)
+## M5GO-Bottom2 LED Features
+
+When the M5GO-Bottom2 module is attached to your Core2/CoreS3, the assistant automatically detects it and provides rich visual feedback through 10 NeoPixel LEDs.
+
+### Automatic Detection
+- Detects M5GO-Bottom2 on startup (Core2/CoreS3 only)
+- Brief blue flash confirms successful initialization
+- No configuration needed - works out of the box
+
+### LED Status Indicators
 
 | State | Color | Pattern |
 |-------|-------|---------|
-| WiFi Connecting | Yellow | Pulsing |
-| WiFi Connected | Green | Flash |
-| Recording Ready | Blue | Solid |
-| Speaking Detected | Green | Level bars (1-10) |
-| Listening (Silence) | Blue | 2 LEDs |
-| Transcribing | Cyan | Breathing |
-| AI Thinking | Purple | Solid |
-| TTS Speaking | Orange | Solid |
+| WiFi Connecting | Yellow | Pulsing on/off |
+| WiFi Connected | Green | Brief flash (500ms) |
+| Recording Ready | Blue | Solid (ready to listen) |
+| Speaking Detected | Green | Dynamic level bars (1-10 LEDs) |
+| Listening (Silence) | Blue | 2 LEDs (waiting for speech) |
+| Transcribing | Cyan | Breathing animation |
+| AI Thinking | Purple | Solid (processing) |
+| TTS Speaking | Orange | Solid (audio playback) |
+
+### Real-Time Audio Visualization
+During recording, the LEDs dynamically respond to your voice:
+- **Volume-based**: More LEDs light up as you speak louder (1-10 LEDs)
+- **Color-coded**: Green when speaking, blue when silent
+- **Instant feedback**: See your audio levels in real-time
+- **VAD integration**: Visual confirmation of voice activity detection
 
 ## Audio Profiles
 
@@ -100,10 +119,12 @@ See `secrets.h` for detailed configuration:
 
 ## Voice Activity Detection (VAD)
 
-Automatically stops recording after 1.5 seconds of silence (configurable in `config.h`):
+Automatically stops recording after 1.5 seconds of silence (configurable in main `.ino` file):
 - `VAD_SILENCE_THRESHOLD` - RMS level for silence detection (default: 500)
 - `VAD_SILENCE_DURATION` - Seconds of silence before stop (default: 1.5)
 - `VAD_ENABLED` - Enable/disable VAD (default: true)
+
+When using M5GO-Bottom2, VAD status is visually indicated through LED colors and patterns.
 
 ## Memory Usage
 
