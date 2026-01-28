@@ -9,161 +9,39 @@
 #include <MP3DecoderHelix.h>
 using namespace libhelix;
 
-// FastLED for M5GO-Bottom2 LED control
-#include <FastLED.h>
+// Modular includes
+#include "config.h"
+#include "m5go_leds.h"
+#include "display.h"
+#include "audio.h"
+#include "network.h"
 
 // Display dimensions - set dynamically in setup()
-static int WIDTH = 240;
-static int HEIGHT = 135;
+int WIDTH = 240;
+int HEIGHT = 135;
 
-// M5GO-Bottom2 LED configuration
-#define M5GO_NUM_LEDS 10
-#define M5GO_DATA_PIN 25
+// M5GO-Bottom2 LED state
 CRGB leds[M5GO_NUM_LEDS];
-static bool hasM5GOBottom2 = false;
+bool hasM5GOBottom2 = false;
 
-// Credentials are now in secrets.h
+// Current audio settings (dynamic) - defined in config.h
+int SAMPLE_RATE = 8000;
+int RECORD_SECONDS = 5;
+int RECORD_SAMPLES = SAMPLE_RATE * RECORD_SECONDS;
+int16_t *audioBuffer = nullptr;
 
-// Audio quality profiles
-struct AudioProfile {
-  const char* name;
-  int sampleRate;
-  int recordSeconds;
-  const char* quality;
-};
+// Profile management - defined in config.h
+int currentProfileIndex = 0;
+bool isLargeDevice = false;
+int numProfiles = 2;
+const AudioProfile* deviceProfiles = STICK_PROFILES;
 
-// Profiles for M5StickC Plus2 (limited RAM ~120KB safe)
-static const AudioProfile STICK_PROFILES[] = {
-  {"Standard", 8000, 5, "Good"},      // 80KB - default
-  {"HQ Short", 16000, 3, "Excellent"} // 96KB - high quality
-};
+// LED functions now in m5go_leds.h
+// Config functions now in config.h
 
-// Profiles for Core2/CoreS3 (more RAM ~300KB+ safe)
-static const AudioProfile CORE_PROFILES[] = {
-  {"Standard", 8000, 8, "Good"},       // 128KB - balanced default
-  {"Long", 8000, 15, "Good"},           // 240KB - extended recording
-  {"HQ Short", 16000, 5, "Excellent"} // 160KB - high quality, quick
-
-};
-
-// Current audio settings (dynamic)
-static int SAMPLE_RATE = 8000;
-static int RECORD_SECONDS = 5;
-static int RECORD_SAMPLES = SAMPLE_RATE * RECORD_SECONDS;
-static int16_t *audioBuffer = nullptr;
-
-// Profile management
-static int currentProfileIndex = 0;
-static bool isLargeDevice = false; // Core2/CoreS3 vs StickC
-static int numProfiles = 2;
-static const AudioProfile* deviceProfiles = STICK_PROFILES;
-
-// M5GO-Bottom2 LED control functions
-void detectM5GOBottom2() {
-  if (!isLargeDevice) {
-    hasM5GOBottom2 = false;
-    return;
-  }
-  
-  // Try to initialize FastLED on GPIO25
-  FastLED.addLeds<NEOPIXEL, M5GO_DATA_PIN>(leds, M5GO_NUM_LEDS);
-  FastLED.setBrightness(50);
-  
-  // Test pattern - flash all LEDs briefly
-  fill_solid(leds, M5GO_NUM_LEDS, CRGB::Blue);
-  FastLED.show();
-  delay(100);
-  fill_solid(leds, M5GO_NUM_LEDS, CRGB::Black);
-  FastLED.show();
-  
-  hasM5GOBottom2 = true;
-  Serial.println("M5GO-Bottom2 detected and initialized");
-}
-
-void setM5GOLEDs(CRGB color) {
-  if (!hasM5GOBottom2) return;
-  fill_solid(leds, M5GO_NUM_LEDS, color);
-  FastLED.show();
-}
-
-void setM5GOLEDsPattern(int activeLeds, CRGB color) {
-  if (!hasM5GOBottom2) return;
-  for (int i = 0; i < M5GO_NUM_LEDS; i++) {
-    leds[i] = (i < activeLeds) ? color : CRGB::Black;
-  }
-  FastLED.show();
-}
-
-void pulseM5GOLEDs(CRGB color, int delayMs = 50) {
-  if (!hasM5GOBottom2) return;
-  
-  // Pulse from center outward
-  for (int i = 0; i < 5; i++) {
-    leds[4 - i] = color;
-    leds[5 + i] = color;
-    FastLED.show();
-    delay(delayMs);
-  }
-  
-  delay(delayMs);
-  
-  // Fade out
-  for (int i = 4; i >= 0; i--) {
-    leds[4 - i] = CRGB::Black;
-    leds[5 + i] = CRGB::Black;
-    FastLED.show();
-    delay(delayMs);
-  }
-}
-
-void breatheM5GOLEDs(CRGB color, int cycles = 1) {
-  if (!hasM5GOBottom2) return;
-  
-  for (int c = 0; c < cycles; c++) {
-    // Breathe in
-    for (int brightness = 0; brightness <= 255; brightness += 5) {
-      CRGB dimColor = color;
-      dimColor.nscale8(brightness);
-      fill_solid(leds, M5GO_NUM_LEDS, dimColor);
-      FastLED.show();
-      delay(10);
-    }
-    
-    // Breathe out
-    for (int brightness = 255; brightness >= 0; brightness -= 5) {
-      CRGB dimColor = color;
-      dimColor.nscale8(brightness);
-      fill_solid(leds, M5GO_NUM_LEDS, dimColor);
-      FastLED.show();
-      delay(10);
-    }
-  }
-  
-  fill_solid(leds, M5GO_NUM_LEDS, CRGB::Black);
-  FastLED.show();
-}
-
-void clearM5GOLEDs() {
-  if (!hasM5GOBottom2) return;
-  fill_solid(leds, M5GO_NUM_LEDS, CRGB::Black);
-  FastLED.show();
-}
-
-// Dynamic system prompt (built based on device type)
-static int currentMaxWords = 20;
-static String systemPrompt = "";
-
-// Build system prompt with device-appropriate word limit
-void buildSystemPrompt() {
-  currentMaxWords = isLargeDevice ? LLM_MAX_WORDS_LARGE : LLM_MAX_WORDS_SMALL;
-  systemPrompt = String(LLM_SYSTEM_PROMPT_BASE) + " in " + String(currentMaxWords) + " words or less.";
-  Serial.printf("System prompt: %s\n", systemPrompt.c_str());
-}
-
-// Voice Activity Detection (VAD) settings
-static const int VAD_SILENCE_THRESHOLD = 500;  // RMS threshold for silence (adjust based on testing)
-static const float VAD_SILENCE_DURATION = 1.5; // Seconds of silence before auto-stop
-static const bool VAD_ENABLED = true;          // Enable/disable VAD
+// Dynamic system prompt
+int currentMaxWords = 20;
+String systemPrompt = "";
 
 String response = "Press A\nto ask a question";
 
@@ -174,36 +52,7 @@ String currentSessionId = "";
 // Track actual recorded samples (for VAD early stop)
 int actualRecordedSamples = RECORD_SAMPLES;
 
-// Apply selected audio profile
-void applyAudioProfile(int profileIndex) {
-  if (profileIndex < 0 || profileIndex >= numProfiles) return;
-  
-  const AudioProfile& profile = deviceProfiles[profileIndex];
-  SAMPLE_RATE = profile.sampleRate;
-  RECORD_SECONDS = profile.recordSeconds;
-  RECORD_SAMPLES = SAMPLE_RATE * RECORD_SECONDS;
-  currentProfileIndex = profileIndex;
-  
-  // Free old buffer if exists (will reallocate on next recording)
-  if (audioBuffer != nullptr) {
-    free(audioBuffer);
-    audioBuffer = nullptr;
-  }
-  
-  Serial.printf("Profile: %s (%dHz, %ds, %s)\n", 
-                profile.name, profile.sampleRate, profile.recordSeconds, profile.quality);
-}
-
-// Cycle to next profile
-void nextAudioProfile() {
-  int nextIndex = (currentProfileIndex + 1) % numProfiles;
-  applyAudioProfile(nextIndex);
-}
-
-// Get current profile name
-const char* getCurrentProfileName() {
-  return deviceProfiles[currentProfileIndex].name;
-}
+// Audio profile functions now in config.h
 
 // TTS audio output buffer and state (kept for replay)
 static int16_t* ttsOutputBuffer = nullptr;
@@ -412,365 +261,13 @@ void replayTts() {
 }
 
 // Real-time audio display
-static volatile bool isRecording = false;
-static volatile int currentRmsLevel = 0;
-static volatile int recordingSecondsLeft = 0;
-static TaskHandle_t displayTaskHandle = NULL;
+volatile bool isRecording = false;
+volatile int currentRmsLevel = 0;
+volatile int recordingSecondsLeft = 0;
+TaskHandle_t displayTaskHandle = NULL;
+bool audioLevelInitialized = false;
 
-// UUID v4 generator for message and session IDs
-String generateUUID() {
-  String uuid = "";
-  const char* hex = "0123456789abcdef";
-  
-  for (int i = 0; i < 36; i++) {
-    if (i == 8 || i == 13 || i == 18 || i == 23) {
-      uuid += '-';
-    } else if (i == 14) {
-      uuid += '4'; // Version 4
-    } else if (i == 19) {
-      uuid += hex[(esp_random() & 0x3) | 0x8]; // Variant bits
-    } else {
-      uuid += hex[esp_random() & 0xF];
-    }
-  }
-  
-  return uuid;
-}
-
-// Get Unix timestamp in seconds
-unsigned long getUnixTimestamp() {
-  time_t now;
-  time(&now);
-  return (unsigned long)now;
-}
-
-// Get Unix timestamp in milliseconds
-unsigned long long getUnixTimestampMs() {
-  return (unsigned long long)getUnixTimestamp() * 1000;
-}
-
-void drawScreen(const String &text) {
-  Serial.println("Drawing to screen: " + text);
-  M5.Display.fillScreen(TFT_BLACK);
-  M5.Display.setTextColor(TFT_WHITE);
-  M5.Display.setTextDatum(MC_DATUM);
-  M5.Display.setTextFont(2);
-
-  int lineCount = 1;
-  for (unsigned int i = 0; i < text.length(); i++) {
-    if (text[i] == '\n')
-      lineCount++;
-  }
-
-  int lineHeight = M5.Display.fontHeight() + 4;
-  int startY = (HEIGHT - lineCount * lineHeight) / 2 + lineHeight / 2;
-
-  int lineNum = 0;
-  int lineStart = 0;
-  for (unsigned int i = 0; i <= text.length(); i++) {
-    if (i == text.length() || text[i] == '\n') {
-      String line = text.substring(lineStart, i);
-      M5.Display.drawString(line, WIDTH / 2, startY + lineNum * lineHeight);
-      lineNum++;
-      lineStart = i + 1;
-    }
-  }
-}
-
-void drawProgress(int seconds) {
-  String msg = "Recording... " + String(seconds);
-  drawScreen(msg);
-}
-
-// Display task runs on core 0, updates display in real-time
-void displayTask(void *parameter) {
-  while (true) {
-    if (isRecording) {
-      drawAudioLevel(recordingSecondsLeft, currentRmsLevel);
-    }
-    vTaskDelay(50 / portTICK_PERIOD_MS); // ~20fps update rate
-  }
-}
-
-// Track previous values to avoid unnecessary redraws
-static int lastDisplayedSeconds = -1;
-static int lastDisplayedBars = -1;
-static bool lastSpeakingState = false;
-static bool audioLevelInitialized = false;
-
-void initAudioLevelDisplay() {
-  M5.Display.fillScreen(TFT_BLACK);
-  M5.Display.setTextColor(TFT_WHITE);
-  M5.Display.setTextDatum(MC_DATUM);
-  M5.Display.setTextFont(2);
-  
-  // Draw static title
-  M5.Display.drawString("Recording...", WIDTH / 2, 15);
-  
-  // Draw inactive bars as background
-  int barHeight = 12;
-  int barSpacing = 3;
-  int maxBars = 10;
-  int barStartY = 75;
-  int totalWidth = WIDTH - 40;
-  int barWidth = (totalWidth / maxBars) - barSpacing;
-  int startX = (WIDTH - (maxBars * (barWidth + barSpacing) - barSpacing)) / 2;
-  
-  for (int i = 0; i < maxBars; i++) {
-    int x = startX + i * (barWidth + barSpacing);
-    M5.Display.fillRect(x, barStartY, barWidth, barHeight, TFT_DARKGREY);
-  }
-  
-  lastDisplayedSeconds = -1;
-  lastDisplayedBars = -1;
-  lastSpeakingState = false;
-  audioLevelInitialized = true;
-}
-
-void drawAudioLevel(int seconds, int rmsLevel) {
-  // Initialize on first call
-  if (!audioLevelInitialized) {
-    initAudioLevelDisplay();
-  }
-  
-  // Bar dimensions
-  int barHeight = 12;
-  int barSpacing = 3;
-  int maxBars = 10;
-  int barStartY = 75;
-  int totalWidth = WIDTH - 40;
-  int barWidth = (totalWidth / maxBars) - barSpacing;
-  int startX = (WIDTH - (maxBars * (barWidth + barSpacing) - barSpacing)) / 2;
-  
-  // Only update countdown if changed
-  if (seconds != lastDisplayedSeconds) {
-    // Clear previous countdown area
-    M5.Display.fillRect(WIDTH/2 - 30, 30, 60, 35, TFT_BLACK);
-    
-    M5.Display.setTextFont(4);
-    M5.Display.setTextDatum(MC_DATUM);
-    M5.Display.setTextColor(seconds <= 1 ? TFT_RED : TFT_GREEN);
-    M5.Display.drawString(String(seconds), WIDTH / 2, 45);
-    lastDisplayedSeconds = seconds;
-  }
-  
-  // Calculate active bars
-  int activeBars = map(constrain(rmsLevel, 0, 3000), 0, 3000, 0, maxBars);
-  
-  // Only update bars if changed
-  if (activeBars != lastDisplayedBars) {
-    for (int i = 0; i < maxBars; i++) {
-      int x = startX + i * (barWidth + barSpacing);
-      uint16_t color;
-      
-      if (i < activeBars) {
-        if (i < 6) {
-          color = TFT_GREEN;
-        } else if (i < 8) {
-          color = TFT_YELLOW;
-        } else {
-          color = TFT_RED;
-        }
-      } else {
-        color = TFT_DARKGREY;
-      }
-      
-      M5.Display.fillRect(x, barStartY, barWidth, barHeight, color);
-    }
-    lastDisplayedBars = activeBars;
-  }
-  
-  // Only update status text if speaking state changed
-  bool isSpeaking = (rmsLevel >= VAD_SILENCE_THRESHOLD);
-  if (isSpeaking != lastSpeakingState) {
-    // Clear status area
-    M5.Display.fillRect(0, HEIGHT - 25, WIDTH, 20, TFT_BLACK);
-    
-    M5.Display.setTextFont(1);
-    M5.Display.setTextDatum(MC_DATUM);
-    M5.Display.setTextColor(isSpeaking ? TFT_GREEN : TFT_DARKGREY);
-    M5.Display.drawString(isSpeaking ? "Speaking" : "Listening...", WIDTH / 2, HEIGHT - 15);
-    lastSpeakingState = isSpeaking;
-  }
-}
-
-bool recordAudio() {
-  Serial.println("\n========== RECORDING ==========");
-
-  if (!audioBuffer) {
-    Serial.printf("Allocating buffer: %d samples, %d bytes\n", RECORD_SAMPLES,
-                  RECORD_SAMPLES * sizeof(int16_t));
-    audioBuffer = (int16_t *)malloc(RECORD_SAMPLES * sizeof(int16_t));
-    if (!audioBuffer) {
-      Serial.println("ERROR: Failed to allocate audio buffer!");
-      return false;
-    }
-    Serial.println("Buffer allocated OK");
-  } else {
-    Serial.println("Using existing buffer");
-  }
-
-  Serial.println("Starting mic...");
-  M5.Mic.begin();
-
-  // Use smaller chunks for more responsive display (250ms chunks = 4 updates/sec)
-  const int CHUNK_MS = 250;
-  const int SAMPLES_PER_CHUNK = SAMPLE_RATE * CHUNK_MS / 1000;
-  const int CHUNKS_PER_SECOND = 1000 / CHUNK_MS;
-  
-  int totalSamplesRecorded = 0;
-  int silentChunks = 0;
-  int silenceChunkThreshold = (int)(VAD_SILENCE_DURATION * CHUNKS_PER_SECOND);
-  bool stoppedEarly = false;
-  
-  // Start display task for real-time updates
-  isRecording = true;
-  recordingSecondsLeft = RECORD_SECONDS;
-  currentRmsLevel = 0;
-  audioLevelInitialized = false; // Reset so display initializes fresh
-  
-  // Initialize M5GO LEDs for recording
-  if (hasM5GOBottom2) {
-    setM5GOLEDs(CRGB::Blue); // Blue = ready to listen
-  }
-  
-  // Create display task on core 0 (main loop runs on core 1)
-  if (displayTaskHandle == NULL) {
-    xTaskCreatePinnedToCore(displayTask, "displayTask", 4096, NULL, 1, &displayTaskHandle, 0);
-  }
-  
-  int totalChunks = RECORD_SECONDS * CHUNKS_PER_SECOND;
-  Serial.printf("Recording %d chunks of %dms each...\n", totalChunks, CHUNK_MS);
-  
-  for (int chunk = 0; chunk < totalChunks; chunk++) {
-    int offset = totalSamplesRecorded;
-    
-    // Record one chunk
-    M5.Mic.record(&audioBuffer[offset], SAMPLES_PER_CHUNK, SAMPLE_RATE);
-    while (M5.Mic.isRecording()) {
-      delay(1);
-    }
-    
-    totalSamplesRecorded += SAMPLES_PER_CHUNK;
-    
-    // Calculate RMS for this chunk (skip first 2 chunks to ignore button click)
-    if (chunk >= 2) {
-      int64_t sum = 0;
-      for (int i = 0; i < SAMPLES_PER_CHUNK; i++) {
-        int16_t sample = audioBuffer[offset + i];
-        sum += (int64_t)sample * sample;
-      }
-      currentRmsLevel = (int)sqrt(sum / SAMPLES_PER_CHUNK);
-      
-      // Update M5GO LEDs based on audio level
-      if (hasM5GOBottom2) {
-        int activeLeds = map(constrain(currentRmsLevel, 0, 3000), 0, 3000, 0, M5GO_NUM_LEDS);
-        if (currentRmsLevel >= VAD_SILENCE_THRESHOLD) {
-          // Speaking detected - green LEDs
-          setM5GOLEDsPattern(activeLeds, CRGB::Green);
-        } else {
-          // Silence - dim blue LEDs
-          setM5GOLEDsPattern(2, CRGB::Blue);
-        }
-      }
-    }
-    
-    // Update countdown
-    recordingSecondsLeft = RECORD_SECONDS - (chunk / CHUNKS_PER_SECOND);
-    
-    // Log every second
-    if (chunk % CHUNKS_PER_SECOND == 0) {
-      Serial.printf("Recording: %ds, RMS: %d\n", chunk / CHUNKS_PER_SECOND + 1, currentRmsLevel);
-    }
-    
-    // VAD check after first second
-    if (VAD_ENABLED && chunk >= CHUNKS_PER_SECOND) {
-      if (currentRmsLevel < VAD_SILENCE_THRESHOLD) {
-        silentChunks++;
-        
-        if (silentChunks >= silenceChunkThreshold) {
-          Serial.println("Silence threshold - stopping");
-          stoppedEarly = true;
-          break;
-        }
-      } else {
-        silentChunks = 0;
-      }
-    }
-  }
-
-  // Stop recording
-  isRecording = false;
-  M5.Mic.end();
-  
-  // Clear M5GO LEDs
-  clearM5GOLEDs();
-  
-  // Update actual recorded samples for transcription
-  actualRecordedSamples = totalSamplesRecorded;
-  
-  if (stoppedEarly) {
-    Serial.printf("Recording stopped early after %d samples (%.1fs)\n", 
-                  totalSamplesRecorded, (float)totalSamplesRecorded / SAMPLE_RATE);
-  } else {
-    Serial.println("Recording complete");
-  }
-
-  // Audio stats
-  int16_t minVal = 32767, maxVal = -32768;
-  int64_t sum = 0;
-  for (int i = 0; i < actualRecordedSamples; i++) {
-    if (audioBuffer[i] < minVal)
-      minVal = audioBuffer[i];
-    if (audioBuffer[i] > maxVal)
-      maxVal = audioBuffer[i];
-    sum += abs(audioBuffer[i]);
-  }
-  Serial.printf("Audio stats: min=%d, max=%d, avg=%lld\n", minVal, maxVal,
-                sum / actualRecordedSamples);
-  Serial.println("================================\n");
-
-  return true;
-}
-
-void createWavHeader(uint8_t *header, int dataSize) {
-  int fileSize = dataSize + 36;
-  int byteRate = SAMPLE_RATE * 1 * 16 / 8;
-  int blockAlign = 1 * 16 / 8;
-
-  memcpy(header, "RIFF", 4);
-  header[4] = fileSize & 0xFF;
-  header[5] = (fileSize >> 8) & 0xFF;
-  header[6] = (fileSize >> 16) & 0xFF;
-  header[7] = (fileSize >> 24) & 0xFF;
-  memcpy(header + 8, "WAVE", 4);
-  memcpy(header + 12, "fmt ", 4);
-  header[16] = 16;
-  header[17] = 0;
-  header[18] = 0;
-  header[19] = 0;
-  header[20] = 1;
-  header[21] = 0;
-  header[22] = 1;
-  header[23] = 0;
-  header[24] = SAMPLE_RATE & 0xFF;
-  header[25] = (SAMPLE_RATE >> 8) & 0xFF;
-  header[26] = (SAMPLE_RATE >> 16) & 0xFF;
-  header[27] = (SAMPLE_RATE >> 24) & 0xFF;
-  header[28] = byteRate & 0xFF;
-  header[29] = (byteRate >> 8) & 0xFF;
-  header[30] = (byteRate >> 16) & 0xFF;
-  header[31] = (byteRate >> 24) & 0xFF;
-  header[32] = blockAlign;
-  header[33] = 0;
-  header[34] = 16;
-  header[35] = 0;
-  memcpy(header + 36, "data", 4);
-  header[40] = dataSize & 0xFF;
-  header[41] = (dataSize >> 8) & 0xFF;
-  header[42] = (dataSize >> 16) & 0xFF;
-  header[43] = (dataSize >> 24) & 0xFF;
-}
+// Display and audio functions now in display.h and audio.h
 
 String transcribeAudio() {
   Serial.println("\n========== TRANSCRIBING ==========");
@@ -1929,38 +1426,7 @@ String askGPT(const String &question) {
   return result;
 }
 
-String wordWrap(const String &text, int maxChars) {
-  String result;
-  String word;
-  int lineLen = 0;
-
-  for (unsigned int i = 0; i <= text.length(); i++) {
-    char c = (i < text.length()) ? text[i] : ' ';
-
-    if (c == ' ' || c == '\n') {
-      if (lineLen + word.length() > maxChars) {
-        result += '\n';
-        lineLen = 0;
-      }
-      result += word;
-      lineLen += word.length();
-      word = "";
-
-      if (c == ' ' && lineLen > 0) {
-        result += ' ';
-        lineLen++;
-      }
-      if (c == '\n') {
-        result += '\n';
-        lineLen = 0;
-      }
-    } else {
-      word += c;
-    }
-  }
-
-  return result;
-}
+// wordWrap() now in display.h
 
 void setup() {
   Serial.begin(115200);
@@ -1974,38 +1440,17 @@ void setup() {
   M5.begin(cfg);
   M5.Display.setRotation(1);
 
-  // Get actual display dimensions (works for StickC Plus 2, Core 2, etc.)
-  WIDTH = M5.Display.width();
-  HEIGHT = M5.Display.height();
-  Serial.printf("Display: %dx%d\n", WIDTH, HEIGHT);
-
-  // Detect device type based on display size
-  // Core2/CoreS3: 320x240, StickC Plus2: 240x135 (rotated)
-  size_t freeHeap = ESP.getFreeHeap();
-  Serial.printf("Free heap at startup: %d bytes\n", freeHeap);
-  
-  // Use display size as primary indicator (more reliable than heap)
-  // Core2/CoreS3 have 320x240 displays, StickC has 240x135
-  if (WIDTH >= 320 && HEIGHT >= 240) {
-    isLargeDevice = true;
-    deviceProfiles = CORE_PROFILES;
-    numProfiles = 3;
-    Serial.println("Device: Core2/CoreS3 (large screen)");
-  } else {
-    isLargeDevice = false;
-    deviceProfiles = STICK_PROFILES;
-    numProfiles = 2;
-    Serial.println("Device: StickC Plus2 (small screen)");
-  }
+  // Detect device type and configure (from config.h)
+  detectDeviceType();
   Serial.printf("Max words: %d\n", isLargeDevice ? LLM_MAX_WORDS_LARGE : LLM_MAX_WORDS_SMALL);
   
   // Apply default profile and build system prompt
   applyAudioProfile(0);
-  buildSystemPrompt();
-  Serial.printf("Free heap: %d bytes\n", freeHeap);
+  buildSystemPrompt(LLM_SYSTEM_PROMPT_BASE, LLM_MAX_WORDS_SMALL, LLM_MAX_WORDS_LARGE);
+  Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
   
-  // Detect M5GO-Bottom2 after device type is determined
-  detectM5GOBottom2();
+  // Detect M5GO-Bottom2 after device type is determined (from m5go_leds.h)
+  detectM5GOBottom2(isLargeDevice);
 
   drawScreen("Connecting...");
 
