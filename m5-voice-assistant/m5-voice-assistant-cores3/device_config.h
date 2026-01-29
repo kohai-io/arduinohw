@@ -19,16 +19,29 @@ static const AudioProfile STICK_PROFILES[] = {
 
 // Profiles for Core2/CoreS3 (more RAM ~300KB+ safe)
 static const AudioProfile CORE_PROFILES[] = {
-  {"Standard", 8000, 8, "Good"},       // 128KB - balanced default
-  {"Long", 8000, 15, "Good"},           // 240KB - extended recording
-  {"HQ Short", 16000, 5, "Excellent"} // 160KB - high quality, quick
-
+  {"HQ", 16000, 5, "Excellent"},       // 160KB - high quality default (better STT)
+  {"Standard", 8000, 8, "Good"},       // 128KB - balanced
+  {"Long", 8000, 15, "Good"}           // 240KB - extended recording
 };
 
 // Voice Activity Detection (VAD) settings - defined in main .ino
 // const int VAD_SILENCE_THRESHOLD = 500;
 // const float VAD_SILENCE_DURATION = 1.5;
 // const bool VAD_ENABLED = true;
+
+// UI Mode Configuration
+// CoreS3 has touchscreen, no physical buttons
+#define USE_PHYSICAL_BUTTONS false  // No physical buttons on CoreS3
+#define ENABLE_TOUCH_UI true         // Enable touch UI (CoreS3 has touchscreen)
+
+// Hardware Features
+// Camera support (built-in GC0308 camera on CoreS3)
+#define ENABLE_CAMERA true           // CoreS3 has built-in camera
+
+// M5GO-Bottom2 LED support (not compatible with CoreS3 camera - uses same pin)
+#define ENABLE_M5GO_LEDS false       // Disabled (GPIO 25 conflict with camera)
+#define M5GO_DATA_PIN 25             // GPIO pin for M5GO LED data
+#define M5GO_NUM_LEDS 10             // Number of LEDs in M5GO-Bottom2
 
 // Display dimensions - set dynamically in setup()
 extern int WIDTH;

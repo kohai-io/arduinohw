@@ -27,16 +27,52 @@ Multi-device voice assistant for M5Stack devices with OpenAI/OpenWebUI integrati
 
 ```
 m5-voice-assistant/
-├── m5-voice-assistant.ino  # Main application
-├── secrets.h               # WiFi & API credentials
-├── secrets.example.h       # Template for credentials
-├── device_config.h         # Device detection & profiles
-├── audio.h                 # Recording & WAV generation
-├── display.h               # Screen rendering & UI
-├── m5go_leds.h            # LED control (M5GO-Bottom2)
-├── api_functions.h        # API declarations
-└── README.md              # This file
+├── README.md                          # This file - setup guide
+├── secrets.example.h                  # Template for credentials
+├── common/                            # Shared code (all devices)
+│   ├── api_functions.h                # API declarations
+│   ├── audio.h                        # Recording & WAV generation
+│   ├── display.h                      # Screen rendering & UI
+│   └── image_upload.h                 # Image upload (camera)
+├── m5-voice-assistant-stickc/         # M5StickC Plus/Plus2
+│   ├── m5-voice-assistant-stickc.ino
+│   ├── device_config.h
+│   └── m5go_leds.h
+├── m5-voice-assistant-core2/          # M5Stack Core2
+│   ├── m5-voice-assistant-core2.ino
+│   ├── device_config.h
+│   ├── m5go_leds.h
+│   └── touch_ui.h
+└── m5-voice-assistant-cores3/         # M5Stack CoreS3 & CoreS3 Lite
+    ├── m5-voice-assistant-cores3.ino
+    ├── device_config.h
+    ├── camera.h                       # (experimental)
+    ├── touch_ui.h
+    └── m5go_leds.h
 ```
+
+## Getting Started
+
+### 1. Choose Your Device Folder
+Navigate to the folder for your M5Stack device:
+- **M5StickC Plus/Plus2**: Use `m5-voice-assistant-stickc/`
+- **M5Stack Core2**: Use `m5-voice-assistant-core2/`
+- **M5Stack CoreS3 or CoreS3 Lite**: Use `m5-voice-assistant-cores3/`
+
+### 2. Configure Credentials
+Copy `secrets.example.h` to `secrets.h` in the root folder and fill in your credentials:
+```cpp
+// WiFi
+const char* WIFI_SSID = "your-wifi-ssid";
+const char* WIFI_PASS = "your-wifi-password";
+
+// API Keys
+const char* STT_API_KEY = "your-openai-key";
+const char* LLM_API_KEY = "your-openai-key";
+```
+
+### 3. Open and Upload
+Open the `.ino` file from your device folder in Arduino IDE and upload to your device.
 
 ## M5GO-Bottom2 LED Features
 

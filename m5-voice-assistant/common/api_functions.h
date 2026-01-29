@@ -40,11 +40,19 @@ void speakText(const String &text);
 void replayTts();
 String transcribeAudio();
 String askGPT(const String &question);
+String askGPTWithImage(const String &question, const String &fileId);
 String createChatSession(const String &title);
 bool updateChatWithUserMessage(const String &chatId, const String &userMsgId, const String &userContent);
 bool chatCompleted(const String &chatId, const String &sessionId, const String &userMsgId, 
                    const String &userContent, const String &assistantMsgId, const String &assistantContent);
 bool saveChatHistory(const String &chatId, const String &userMsgId, const String &userContent,
                      const String &assistantMsgId, const String &assistantContent);
+
+// Camera and image upload functions
+bool initCamera();
+bool captureImage();
+void displayCapturedImage();
+String uploadLastCapturedImage();
+String uploadImageToOWUI(const uint8_t* imageData, size_t imageSize, const char* filename);
 
 #endif // API_FUNCTIONS_H

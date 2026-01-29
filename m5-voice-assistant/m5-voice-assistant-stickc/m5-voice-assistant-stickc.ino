@@ -1,8 +1,9 @@
-#include "secrets.h"
+#include "../secrets.h"
 #include <HTTPClient.h>
 #include <M5Unified.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <Wire.h>
 #include <time.h>
 
 // MP3 decoding for TTS (Core2/CoreS3 only) - uses arduino-libhelix
@@ -19,17 +20,24 @@ using namespace libhelix;
 // Forward declarations for display.h
 extern bool audioLevelInitialized;
 
-#include "display.h"
-#include "audio.h"
-#include "api_functions.h"
+#include "../common/display.h"
+#include "../common/audio.h"
+// StickC Plus2 has no touch screen or camera
+// #include "touch_ui.h"
+// #include "camera.h"
+// #include "../common/image_upload.h"
+#include "../common/api_functions.h"
 
 // Display dimensions - set dynamically in setup()
 int WIDTH = 240;
 int HEIGHT = 135;
 
-// M5GO-Bottom2 LED state
-CRGB leds[M5GO_NUM_LEDS];
+// M5GO-Bottom2 LED state (size from config)
+CRGB leds[10];  // Max size, actual count from M5GO_NUM_LEDS in config
 bool hasM5GOBottom2 = false;
+
+// StickC Plus2 has no camera
+// extern bool cameraInitialized;
 
 // Current audio settings (dynamic) - defined in config.h
 int SAMPLE_RATE = 8000;
@@ -1468,7 +1476,243 @@ String askGPT(const String &question) {
   return result;
 }
 
+String askGPTWithImage(const String &question, const String &fileId) {
+  Serial.println("\n========== ASKING LLM WITH IMAGE ==========");
+  Serial.println("Question: " + question);
+  Serial.println("File ID: " + fileId);
+
+  if (fileId.length() == 0) {
+    Serial.println("ERROR: No file ID provided, falling back to text-only");
+    return askGPT(question);
+  }
+
+  // Step 1: Create or reuse chat session for OpenWebUI
+  if (USE_OWUI_SESSIONS && currentChatId.length() == 0) {
+    currentChatId = createChatSession("M5 Voice Assistant");
+    currentSessionId = generateUUID();
+    if (currentChatId.length() == 0) {
+      Serial.println("ERROR: Failed to create chat session!");
+      return "Session error";
+    }
+  }
+
+  // Step 2: Generate message IDs for OpenWebUI
+  String userMsgId = "";
+  String assistantMsgId = "";
+  if (USE_OWUI_SESSIONS) {
+    userMsgId = generateUUID();
+    assistantMsgId = generateUUID();
+    Serial.println("User message ID: " + userMsgId);
+    Serial.println("Assistant message ID: " + assistantMsgId);
+  }
+
+  HTTPClient http;
+  WiFiClientSecure client;
+  client.setInsecure();
+
+  // Build message content with image file reference
+  // OpenWebUI format for images in messages uses files array
+  String escapedQuestion = question;
+  escapedQuestion.replace("\\", "\\\\");
+  escapedQuestion.replace("\"", "\\\"");
+  escapedQuestion.replace("\n", " ");
+
+  String messageContent = escapedQuestion + systemPrompt;
+
+  // Build messages array with image file
+  String messagesArray = "{\"role\":\"user\",\"content\":\"" + messageContent + "\","
+                        "\"files\":[{\"type\":\"file\",\"id\":\"" + fileId + "\"}]}";
+
+  String url = String(OWUI_BASE_URL) + "/api/v1/chat/completions";
+  
+  Serial.printf("Connecting to LLM at %s...\n", url.c_str());
+  http.begin(client, url);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Authorization", String("Bearer ") + LLM_API_KEY);
+  http.setTimeout(90000);
+
+  String body = "{"
+         "\"model\":\"" + String(LLM_MODEL) + "\","
+         "\"messages\":[" + messagesArray + "],"
+         "\"chat_id\":\"" + currentChatId + "\","
+         "\"id\":\"" + assistantMsgId + "\","
+         "\"session_id\":\"" + currentSessionId + "\","
+         "\"stream\":true"
+         "}";
+
+  Serial.println("Sending request with image...");
+  Serial.println("Body: " + body);
+
+  int httpCode = http.POST(body);
+  Serial.printf("HTTP response code: %d\n", httpCode);
+
+  if (httpCode != 200) {
+    String error = http.getString();
+    Serial.println("Error response: " + error);
+    http.end();
+    return "HTTP " + String(httpCode);
+  }
+
+  String result = "";
+  String resp = http.getString();
+  http.end();
+  
+  Serial.println("Task initiated:");
+  Serial.println(resp);
+  
+  // Poll chat history until assistant response appears
+  Serial.println("Polling chat history for completion...");
+  
+  HTTPClient fetchHttp;
+  WiFiClientSecure fetchClient;
+  fetchClient.setInsecure();
+  
+  String fetchUrl = String(OWUI_BASE_URL) + "/api/v1/chats/" + currentChatId;
+  unsigned long pollStart = millis();
+  int pollAttempt = 0;
+  
+  while (millis() - pollStart < 90000) { // 90 second timeout for image processing
+    pollAttempt++;
+    delay(1500); // Poll every 1.5 seconds (image processing takes longer)
+    
+    Serial.printf("[POLL #%d] Fetching chat history...\n", pollAttempt);
+    
+    fetchHttp.begin(fetchClient, fetchUrl);
+    fetchHttp.addHeader("Authorization", String("Bearer ") + LLM_API_KEY);
+    
+    int fetchCode = fetchHttp.GET();
+    String chatData = fetchHttp.getString();
+    fetchHttp.end();
+    
+    if (fetchCode == 200) {
+      int msgIdx = chatData.indexOf("\"" + assistantMsgId + "\"");
+      
+      if (msgIdx >= 0) {
+        Serial.printf("Found assistant message after %d polls\n", pollAttempt);
+        
+        int contentIdx = chatData.indexOf("\"content\"", msgIdx);
+        if (contentIdx < 0) {
+          int searchStart = (msgIdx > 500) ? msgIdx - 500 : 0;
+          String searchBlock = chatData.substring(searchStart, msgIdx);
+          int relContentIdx = searchBlock.lastIndexOf("\"content\"");
+          if (relContentIdx >= 0) {
+            contentIdx = searchStart + relContentIdx;
+          }
+        }
+        
+        if (contentIdx >= 0) {
+          int start = chatData.indexOf('"', contentIdx + 9);
+          if (start >= 0) {
+            start++;
+            bool esc = false;
+            for (unsigned int i = start; i < chatData.length(); i++) {
+              char c = chatData[i];
+              if (esc) {
+                if (c == 'n') result += '\n';
+                else if (c == 't') result += '\t';
+                else result += c;
+                esc = false;
+              } else if (c == '\\') {
+                esc = true;
+              } else if (c == '"') {
+                break;
+              } else {
+                result += c;
+              }
+            }
+          }
+          
+          if (result.length() > 0) {
+            Serial.printf("Retrieved response length: %d\n", result.length());
+            break;
+          } else {
+            Serial.println("Content empty, waiting...");
+          }
+        } else {
+          Serial.println("Content field not found near message ID");
+        }
+      } else {
+        Serial.println("Assistant message not ready yet...");
+      }
+    } else {
+      Serial.printf("Fetch failed: HTTP %d\n", fetchCode);
+    }
+  }
+  
+  if (result.length() == 0) {
+    Serial.printf("ERROR: No response after %d polls\n", pollAttempt);
+    return "Timeout";
+  }
+
+  Serial.println("Extracted answer: " + result);
+  Serial.println("===========================================\n");
+
+  // Call completed handler and save chat history
+  if (USE_OWUI_SESSIONS && currentChatId.length() > 0 && userMsgId.length() > 0) {
+    chatCompleted(currentChatId, currentSessionId, userMsgId, question, assistantMsgId, result);
+    saveChatHistory(currentChatId, userMsgId, question, assistantMsgId, result);
+  }
+  
+  return result;
+}
+
 // wordWrap() now in display.h
+
+// Handler for voice-only questions (used by touch UI)
+void handleVoiceQuestion() {
+  Serial.println("\n*** VOICE QUESTION TRIGGERED ***\n");
+  Serial.printf("Free heap before recording: %d bytes\n", ESP.getFreeHeap());
+
+  Serial.println("DEBUG: About to call recordAudio()");
+  bool recordResult = recordAudio();
+  Serial.printf("DEBUG: recordAudio() returned: %s\n", recordResult ? "true" : "false");
+  
+  if (!recordResult) {
+    Serial.println("DEBUG: Recording failed, showing error");
+    drawScreen("Mic error");
+    delay(2000);
+    drawScreen("Press A to ask");
+    return;
+  }
+
+  Serial.printf("Free heap after recording: %d bytes\n", ESP.getFreeHeap());
+  Serial.println("DEBUG: About to show transcribing screen");
+
+  drawScreen("Transcribing...");
+  
+  Serial.println("DEBUG: About to call transcribeAudio()");
+  String question = transcribeAudio();
+  Serial.printf("DEBUG: transcribeAudio() returned: %s\n", question.c_str());
+
+  if (question.length() < 2 || question.startsWith("No ") ||
+      question.startsWith("Parse") || question.startsWith("Connection") ||
+      question.startsWith("Timeout")) {
+    Serial.println("Transcription failed or empty");
+    drawScreen("Couldn't hear.\nTry again.");
+    delay(2000);
+    drawScreen("Press A to ask");
+    return;
+  }
+
+  drawScreen("Thinking...");
+  
+  String answer = askGPT(question);
+
+  int wrapChars = (WIDTH >= 320) ? 35 : 25;
+  response = wordWrap(answer, wrapChars);
+  Serial.println("Final display text:");
+  Serial.println(response);
+  drawScreen(response);
+
+  if (USE_TTS && isLargeDevice) {
+    speakText(answer);
+  }
+
+  Serial.printf("Free heap at end: %d bytes\n", ESP.getFreeHeap());
+  Serial.println("\n*** INTERACTION COMPLETE ***\n");
+}
+
+// StickC Plus2 has no camera - handleCameraQuestion removed
 
 void setup() {
   Serial.begin(115200);
@@ -1491,8 +1735,26 @@ void setup() {
   buildSystemPrompt(LLM_SYSTEM_PROMPT_BASE, LLM_MAX_WORDS_SMALL, LLM_MAX_WORDS_LARGE);
   Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
   
+  // Initialize camera for CoreS3 (has camera module) - do this BEFORE M5GO detection
+  Serial.printf("Camera init check: ENABLE_CAMERA=%d, isLargeDevice=%d, WIDTH=%d, HEIGHT=%d\n", 
+                ENABLE_CAMERA, isLargeDevice, WIDTH, HEIGHT);
+  
+  if (ENABLE_CAMERA && isLargeDevice && WIDTH >= 320 && HEIGHT >= 240) {
+    Serial.println("Initializing camera for CoreS3...");
+    if (initCamera()) {
+      Serial.println("Camera ready for image capture");
+    } else {
+      Serial.println("Camera initialization failed (may not be CoreS3)");
+    }
+  } else if (!ENABLE_CAMERA) {
+    Serial.println("Camera disabled in config");
+  } else {
+    Serial.println("Camera not initialized - device requirements not met");
+  }
+
   // Detect M5GO-Bottom2 after device type is determined (from m5go_leds.h)
-  detectM5GOBottom2(isLargeDevice);
+  // StickC has no camera, so no pin conflict concerns
+  detectM5GOBottom2(isLargeDevice, false);
 
   drawScreen("Connecting...");
 
@@ -1554,6 +1816,8 @@ void setup() {
 
   // Show appropriate prompt based on device capabilities
   const AudioProfile& profile = deviceProfiles[currentProfileIndex];
+  
+  // StickC Plus2 only has physical button A
   String startMsg = String("Press A to ask\n") + 
                     String(profile.sampleRate/1000) + "kHz " + 
                     String(profile.recordSeconds) + "s";
@@ -1564,73 +1828,89 @@ void setup() {
 void loop() {
   M5.update();
 
-  // Trigger on button A (works on both StickC and Core 2 touch buttons)
-  if (M5.BtnA.wasClicked()) {
-    Serial.println("\n*** TRIGGERED ***\n");
-    Serial.printf("Free heap before recording: %d bytes\n", ESP.getFreeHeap());
+  // StickC Plus2 only has physical button A (no touch screen or camera)
+  // Physical button handling
+  // Button A: Click = voice question, Hold 2s = camera + voice question (CoreS3 only)
+  static unsigned long btnAPressTime = 0;
+  static bool btnAHeld = false;
+  
+  if (M5.BtnA.wasPressed()) {
+    btnAPressTime = millis();
+    btnAHeld = false;
+  }
+  
+  // StickC Plus2 has no camera - only short press for voice questions
+  
+  // Short click on button A - normal voice question
+  if (M5.BtnA.wasReleased()) {
+    if (!btnAHeld && (millis() - btnAPressTime < 2000)) {
+      Serial.println("\n*** TRIGGERED ***\n");
+      Serial.printf("Free heap before recording: %d bytes\n", ESP.getFreeHeap());
 
-    if (!recordAudio()) {
-      drawScreen("Mic error");
-      delay(2000);
-      drawScreen("Press A\nto ask a question");
-      return;
-    }
+      if (!recordAudio()) {
+        drawScreen("Mic error");
+        delay(2000);
+        drawScreen("Press A\nto ask a question");
+        return;
+      }
 
-    Serial.printf("Free heap after recording: %d bytes\n", ESP.getFreeHeap());
+      Serial.printf("Free heap after recording: %d bytes\n", ESP.getFreeHeap());
 
-    drawScreen("Transcribing...");
-    
-    // LED: Cyan pulse during transcription
-    if (hasM5GOBottom2) {
-      breatheM5GOLEDs(CRGB::Cyan, 1);
-    }
-    
-    String question = transcribeAudio();
-
-    if (question.length() < 2 || question.startsWith("No ") ||
-        question.startsWith("Parse") || question.startsWith("Connection") ||
-        question.startsWith("Timeout")) {
-      Serial.println("Transcription failed or empty");
-      drawScreen("Couldn't hear.\nTry again.");
-      delay(2000);
-      drawScreen("Press A\nto ask a question");
-      return;
-    }
-
-    drawScreen("Thinking...");
-    
-    // LED: Purple/Magenta during AI thinking
-    if (hasM5GOBottom2) {
-      setM5GOLEDs(CRGB::Purple);
-    }
-    
-    String answer = askGPT(question);
-    
-    // Clear LEDs after response
-    clearM5GOLEDs();
-
-    // Adjust wrap width based on screen size (Core 2 is wider)
-    int wrapChars = (WIDTH >= 320) ? 35 : 25;
-    response = wordWrap(answer, wrapChars);
-    Serial.println("Final display text:");
-    Serial.println(response);
-    drawScreen(response);
-
-    // Speak the response on Core2/CoreS3 (devices with speakers)
-    if (USE_TTS && isLargeDevice) {
-      // LED: Orange during TTS playback
+      drawScreen("Transcribing...");
+      
+      // LED: Cyan pulse during transcription
       if (hasM5GOBottom2) {
-        setM5GOLEDs(CRGB::Orange);
+        breatheM5GOLEDs(CRGB::Cyan, 1);
       }
       
-      speakText(answer);
-      
-      // Clear LEDs after speaking
-      clearM5GOLEDs();
-    }
+      String question = transcribeAudio();
 
-    Serial.printf("Free heap at end: %d bytes\n", ESP.getFreeHeap());
-    Serial.println("\n*** INTERACTION COMPLETE ***\n");
+      if (question.length() < 2 || question.startsWith("No ") ||
+          question.startsWith("Parse") || question.startsWith("Connection") ||
+          question.startsWith("Timeout")) {
+        Serial.println("Transcription failed or empty");
+        drawScreen("Couldn't hear.\nTry again.");
+        delay(2000);
+        drawScreen("Press A\nto ask a question");
+        return;
+      }
+
+      drawScreen("Thinking...");
+      
+      // LED: Purple/Magenta during AI thinking
+      if (hasM5GOBottom2) {
+        setM5GOLEDs(CRGB::Purple);
+      }
+      
+      String answer = askGPT(question);
+      
+      // Clear LEDs after response
+      clearM5GOLEDs();
+
+      // Adjust wrap width based on screen size (Core 2 is wider)
+      int wrapChars = (WIDTH >= 320) ? 35 : 25;
+      response = wordWrap(answer, wrapChars);
+      Serial.println("Final display text:");
+      Serial.println(response);
+      drawScreen(response);
+
+      // Speak the response on Core2/CoreS3 (devices with speakers)
+      if (USE_TTS && isLargeDevice) {
+        // LED: Orange during TTS playback
+        if (hasM5GOBottom2) {
+          setM5GOLEDs(CRGB::Orange);
+        }
+        
+        speakText(answer);
+        
+        // Clear LEDs after speaking
+        clearM5GOLEDs();
+      }
+
+      Serial.printf("Free heap at end: %d bytes\n", ESP.getFreeHeap());
+      Serial.println("\n*** INTERACTION COMPLETE ***\n");
+    }
+    btnAHeld = false;
   }
 
   // Button B: Click = new chat, Hold 2s = toggle audio profile

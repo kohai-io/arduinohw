@@ -62,6 +62,10 @@ const char *TTS_VOICE_2 = "nova";     // Secondary voice
 const char *NTP_SERVER_1 = "pool.ntp.org";
 const char *NTP_SERVER_2 = "time.nist.gov";
 
+// NOTE: Hardware configuration (camera, LEDs, UI mode) is now in device-specific
+// device_config.h files for each device (m5-voice-assistant-core2, cores3, stickc).
+// This allows each device to have appropriate defaults for its hardware capabilities.
+
 // Example OpenWebUI configuration:
 // const bool USE_OWUI_SESSIONS = true;
 // const bool LLM_USE_RESPONSES_API = false;

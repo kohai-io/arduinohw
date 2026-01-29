@@ -1,28 +1,51 @@
 #ifndef M5GO_LEDS_H
 #define M5GO_LEDS_H
 
-// Note: FastLED.h must be included before this header in the main .ino file
-
-// M5GO-Bottom2 LED configuration
-#define M5GO_NUM_LEDS 10
-#define M5GO_DATA_PIN 25
+// Note: FastLED.h and secrets.h must be included before this header in the main .ino file
 
 // Global LED state
-extern CRGB leds[M5GO_NUM_LEDS];
+extern CRGB leds[];
 extern bool hasM5GOBottom2;
 
 // M5GO-Bottom2 LED control functions
-void detectM5GOBottom2(bool isLargeDevice) {
-  if (!isLargeDevice) {
+void detectM5GOBottom2(bool isLargeDevice, bool cameraEnabled = false) {
+  // M5GO-Bottom2 support is currently disabled to avoid GPIO pin 25 conflicts
+  // Pin 25 is used by the camera on CoreS3 and causes compile-time errors with FastLED
+  // To enable M5GO-Bottom2 on Core2 (without camera):
+  // 1. Set ENABLE_M5GO_LEDS = true and ENABLE_CAMERA = false in secrets.h
+  // 2. Uncomment the FastLED initialization code below
+  // 3. Ensure M5GO_DATA_PIN is set to a valid pin (not 25 if using CoreS3)
+  
+  hasM5GOBottom2 = false;
+  Serial.println("M5GO-Bottom2 support disabled (to enable, see m5go_leds.h)");
+  
+  /* UNCOMMENT THIS BLOCK TO ENABLE M5GO-BOTTOM2 (Core2 only, no camera):
+  
+  if (!ENABLE_M5GO_LEDS) {
     hasM5GOBottom2 = false;
+    Serial.println("M5GO-Bottom2 disabled in config");
     return;
   }
   
-  // Try to initialize FastLED on GPIO25
-  FastLED.addLeds<NEOPIXEL, M5GO_DATA_PIN>(leds, M5GO_NUM_LEDS);
+  if (!isLargeDevice) {
+    hasM5GOBottom2 = false;
+    Serial.println("M5GO-Bottom2 not supported on small devices");
+    return;
+  }
+  
+  if (cameraEnabled) {
+    hasM5GOBottom2 = false;
+    Serial.println("M5GO-Bottom2 disabled (camera enabled)");
+    return;
+  }
+  
+  Serial.printf("Initializing M5GO-Bottom2 on pin %d...\n", M5GO_DATA_PIN);
+  
+  // Initialize FastLED - adjust pin number as needed
+  FastLED.addLeds<NEOPIXEL, 25>(leds, M5GO_NUM_LEDS);
   FastLED.setBrightness(50);
   
-  // Test pattern - flash all LEDs briefly
+  // Test pattern
   fill_solid(leds, M5GO_NUM_LEDS, CRGB::Blue);
   FastLED.show();
   delay(100);
@@ -30,7 +53,9 @@ void detectM5GOBottom2(bool isLargeDevice) {
   FastLED.show();
   
   hasM5GOBottom2 = true;
-  Serial.println("M5GO-Bottom2 detected and initialized");
+  Serial.println("M5GO-Bottom2 initialized successfully");
+  
+  */
 }
 
 void setM5GOLEDs(CRGB color) {
