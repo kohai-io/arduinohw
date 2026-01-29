@@ -1,294 +1,209 @@
-# M5StickCPlus2 OpenAI Voice Assistant
+# M5 Voice Assistant
 
-Transform your M5StickCPlus2 into an intelligent voice assistant with OpenWebUI integration, featuring conversation threading, full context awareness, and persistent chat history.
+Multi-device voice assistant for M5Stack devices with OpenAI/OpenWebUI integration.
+
+## Supported Devices
+
+- **M5StickC Plus2** - Compact voice assistant
+- **M5Stack Core2** - Full-featured with touchscreen and speaker
+- **M5Stack CoreS3** - Latest generation with enhanced features
+- **M5GO-Bottom2** - LED expansion module with 10 NeoPixel LEDs (Core2/CoreS3 only)
 
 ## Features
 
-### 🎙️ Voice Interaction
-- **Audio Recording:** Press Button A to record your question
-- **Voice Activity Detection (VAD):** Auto-stops recording after 1.5s of silence
-- **Real-time Audio Level:** Visual feedback with color-coded level meter
-- **Speech-to-Text:** Transcription via OpenAI Whisper or OpenWebUI STT
-- **Text-to-Speech:** Spoken responses on Core2/CoreS3 (devices with speakers)
-- **AI Response:** Get answers from your configured LLM model
+- 🎤 **Voice Recording** with Voice Activity Detection (VAD)
+- 🗣️ **Speech-to-Text** via OpenAI Whisper or OpenWebUI
+- 🤖 **LLM Integration** (OpenAI GPT or OpenWebUI models)
+- 🔊 **Text-to-Speech** (Core2/CoreS3 only)
+- � **Camera Support** (CoreS3 only - experimental)
+  - Live camera preview with tap-to-capture
+  - Vision model integration for image analysis
+  - Software horizontal mirror correction for GC0308 sensor
+- � **LED Visual Feedback** (with M5GO-Bottom2)
+  - Real-time audio level visualization during recording
+  - Status indicators for WiFi, transcription, AI thinking, and TTS
+  - Automatic detection and initialization
+- 📊 **Real-time Audio Level Display**
+- 💾 **Chat History** (OpenWebUI sessions)
+- 🎚️ **Multiple Audio Profiles** (quality/duration presets)
+- ⚙️ **Device-Specific Configurations**
+  - Hardware features configured per device
+  - UI mode (touch vs physical buttons)
+  - Optimized audio quality (16kHz default for Core2/CoreS3)
 
-### 💬 OpenWebUI Integration
+## Project Structure
 
-This project integrates with [OpenWebUI](https://openwebui.com), an extensible, self-hosted WebUI for LLMs.
+```
+m5-voice-assistant/
+├── README.md                          # This file - setup guide
+├── secrets.example.h                  # Template for credentials
+├── common/                            # Shared code (all devices)
+│   ├── api_functions.h                # API declarations
+│   ├── audio.h                        # Recording & WAV generation
+│   ├── display.h                      # Screen rendering & UI
+│   └── image_upload.h                 # Image upload (camera)
+├── m5-voice-assistant-stickc/         # M5StickC Plus/Plus2
+│   ├── m5-voice-assistant-stickc.ino
+│   ├── device_config.h
+│   └── m5go_leds.h
+├── m5-voice-assistant-core2/          # M5Stack Core2
+│   ├── m5-voice-assistant-core2.ino
+│   ├── device_config.h
+│   ├── m5go_leds.h
+│   └── touch_ui.h
+└── m5-voice-assistant-cores3/         # M5Stack CoreS3 & CoreS3 Lite
+    ├── m5-voice-assistant-cores3.ino
+    ├── device_config.h
+    ├── camera.h                       # (experimental)
+    ├── touch_ui.h
+    └── m5go_leds.h
+```
 
-- **Session Tracking:** Maintains persistent chat sessions in OpenWebUI
-- **Conversation Threading:** Linear message chains with proper parent-child relationships
-- **Full Context:** LLM sees entire conversation history for contextual responses
-- **Graceful Recovery:** Automatically handles deleted sessions and creates new ones
-- **New Chat Sessions:** Press Button B to start a fresh conversation
+## Getting Started
 
-**Custom Models/Agents:**
-The `LLM_MODEL` setting can reference any model configured in your OpenWebUI instance, including:
-- Standard LLM models (GPT-4, Claude, Llama, etc.)
-- **Custom Agents** with specialized system prompts
-- **RAG-enabled Models** with knowledge base documents
-- **Tool-equipped Agents** with function calling capabilities
+### 1. Choose Your Device Folder
+Navigate to the folder for your M5Stack device:
+- **M5StickC Plus/Plus2**: Use `m5-voice-assistant-stickc/`
+- **M5Stack Core2**: Use `m5-voice-assistant-core2/`
+- **M5Stack CoreS3 or CoreS3 Lite**: Use `m5-voice-assistant-cores3/`
 
-This allows you to create domain-specific assistants in OpenWebUI (e.g., a technical support agent with your product documentation, or a cooking assistant with recipe knowledge) and access them directly from your M5StickCPlus2 by simply setting the agent/model name in `secrets.h`.
+### 2. Configure Credentials
+Copy `secrets.example.h` to `secrets.h` in the root folder and fill in your credentials:
+```cpp
+// WiFi
+const char* WIFI_SSID = "your-wifi-ssid";
+const char* WIFI_PASS = "your-wifi-password";
 
-### ⚙️ Configurable Settings
-- Custom system prompts
-- Adjustable NTP servers for accurate timestamps
-- Flexible audio recording parameters
-- Multiple API format support (OpenWebUI, standard Chat Completions, Responses API)
+// API Keys
+const char* STT_API_KEY = "your-openai-key";
+const char* LLM_API_KEY = "your-openai-key";
+```
 
-## Hardware Requirements
+### 3. Open and Upload
+Open the `.ino` file from your device folder in Arduino IDE and upload to your device.
 
-**Supported Devices:**
-- M5StickC Plus2 (240x135 display)
-- M5Stack Core2 (320x240 display)
-- M5Stack CoreS3 (320x240 display)
+## M5GO-Bottom2 LED Features
 
-**Also needed:**
-- WiFi connection
-- USB-C cable for programming
+When the M5GO-Bottom2 module is attached to your Core2/CoreS3, the assistant automatically detects it and provides rich visual feedback through 10 NeoPixel LEDs.
+
+### Automatic Detection
+- Detects M5GO-Bottom2 on startup (Core2/CoreS3 only)
+- Brief blue flash confirms successful initialization
+- No configuration needed - works out of the box
+
+### LED Status Indicators
+
+| State | Color | Pattern |
+|-------|-------|---------|
+| WiFi Connecting | Yellow | Pulsing on/off |
+| WiFi Connected | Green | Brief flash (500ms) |
+| Recording Ready | Blue | Solid (ready to listen) |
+| Speaking Detected | Green | Dynamic level bars (1-10 LEDs) |
+| Listening (Silence) | Blue | 2 LEDs (waiting for speech) |
+| Transcribing | Cyan | Breathing animation |
+| AI Thinking | Purple | Solid (processing) |
+| TTS Speaking | Orange | Solid (audio playback) |
+
+### Real-Time Audio Visualization
+During recording, the LEDs dynamically respond to your voice:
+- **Volume-based**: More LEDs light up as you speak louder (1-10 LEDs)
+- **Color-coded**: Green when speaking, blue when silent
+- **Instant feedback**: See your audio levels in real-time
+- **VAD integration**: Visual confirmation of voice activity detection
+
+## Audio Profiles
+
+### M5StickC Plus2
+- **Standard** (default) - 8kHz, 5s (80KB RAM)
+- **HQ Short** - 16kHz, 3s (96KB RAM)
+
+### Core2/CoreS3
+- **HQ** (default) - 16kHz, 5s (160KB RAM) - Better STT accuracy
+- **Standard** - 8kHz, 8s (128KB RAM)
+- **Long** - 8kHz, 15s (240KB RAM)
+
+## Button Controls
+
+### Button A
+- **Click** - Start voice recording
+
+### Button B
+- **Click** - Start new chat session
+- **Hold 2s** - Cycle audio profile
+
+### Button C (Core2/CoreS3 only)
+- **Click** - Replay last TTS audio
+- **Hold 2s** - Toggle TTS voice
 
 ## Setup
 
-### 1. Configure Secrets
+1. **Install Libraries**
+   - M5Unified
+   - FastLED
+   - arduino-libhelix (for TTS)
 
-Copy `secrets.example.h` to `secrets.h` and configure:
+2. **Configure Credentials**
+   ```bash
+   cp secrets.example.h secrets.h
+   # Edit secrets.h with your WiFi and API keys
+   ```
 
+3. **Upload to Device**
+   - Select your M5 device in Arduino IDE
+   - Upload the sketch
+
+## Configuration Options
+
+### Device-Specific Configuration (`device_config.h`)
+
+Each device folder has its own `device_config.h` with hardware-specific settings:
+
+**Core2:**
 ```cpp
-// WiFi Configuration
-const char *WIFI_SSID = "your-wifi-name";
-const char *WIFI_PASS = "your-wifi-password";
-
-// API Keys
-const char *STT_API_KEY = "sk-...";  // For OpenAI Whisper (if USE_OWUI_STT = false)
-const char *LLM_API_KEY = "sk-...";  // For LLM and OpenWebUI
-
-// OpenWebUI Configuration
-const char *OWUI_BASE_URL = "http://your-openwebui-host:8080";
-const char *LLM_MODEL = "your-model-name";
-
-// API Mode Configuration
-const bool USE_OWUI_STT = true;      // Use OpenWebUI for speech-to-text
-const bool USE_OWUI_SESSIONS = true; // Save chats in OpenWebUI history
+#define USE_PHYSICAL_BUTTONS true   // Use A/B/C buttons
+#define ENABLE_TOUCH_UI false        // Disable touch UI
+#define ENABLE_CAMERA false          // Set true if camera module connected
+#define ENABLE_M5GO_LEDS true        // M5GO-Bottom2 LED ring
 ```
 
-### API Configuration Modes
-
-| Mode | USE_OWUI_STT | USE_OWUI_SESSIONS | Description |
-| :--- | :--- | :--- | :--- |
-| **Full OpenWebUI** | true | true | Both STT and LLM via OpenWebUI |
-| **Mixed** | false | true | OpenAI Whisper + OpenWebUI LLM |
-| **Full OpenAI** | false | false | Both STT and LLM via OpenAI |
-
-### 2. Install Dependencies
-
-Required Arduino libraries:
-- M5Unified
-- ArduinoJson
-- HTTPClient
-- WiFiClientSecure
-- **arduino-libhelix** (for TTS on Core2/CoreS3)
-
-**Installing arduino-libhelix:**
-1. Download the latest release ZIP from [arduino-libhelix releases](https://github.com/pschatzmann/arduino-libhelix/releases)
-2. In Arduino IDE: **Sketch → Include Library → Add .ZIP Library**
-3. Select the downloaded ZIP file
-
-### 3. Upload Firmware
-
-Using Arduino IDE:
-1. Open `m5stickcplus2-openai-answers.ino`
-2. Select board: M5StickCPlus2
-3. Upload to device
-
-Using arduino-cli:
-```bash
-arduino-cli compile --fqbn m5stack:esp32:m5stick_c_plus2
-arduino-cli upload -p [PORT] --fqbn m5stack:esp32:m5stick_c_plus2
-```
-
-## Usage
-
-### Basic Operation
-
-1. **Power on** the device
-2. Wait for "Press A to ask a question" on screen
-3. **Press Button A** to start recording
-4. **Speak your question** (recording will auto-stop after configured duration)
-5. Wait for transcription and AI response
-6. View response on display
-
-### Button Controls
-
-- **Button A:** Record and ask a question
-- **Button B (click):** Start a new chat session (clears conversation history)
-- **Button B (hold 2s):** Toggle audio quality profile
-- **Button C (click):** Replay last TTS response (Core2/CoreS3 only)
-- **Button C (hold 2s):** Toggle between TTS voices (Core2/CoreS3 only)
-
-### Conversation Features
-
-**Multi-turn Conversations:**
-The assistant remembers previous messages in the same session:
-```
-You: "What's 2 plus 2?"
-AI: "4"
-You: "What about times 3?"
-AI: "12" (understands you mean 4 × 3)
-```
-
-**Threading in OpenWebUI:**
-All messages are properly linked in a conversation tree:
-```
-User msg (parentId: null)
-└─ Assistant msg (parentId: user_id)
-   └─ User msg (parentId: assistant_id)
-      └─ Assistant msg (parentId: user_id)
-```
-
-## Audio Configuration & Device Profiles
-
-The firmware automatically detects your device type and provides appropriate audio profiles.
-
-### Device-Specific Profiles
-
-**M5StickC Plus2** (240x135 display, ~120KB safe RAM):
-
-| Profile | Sample Rate | Duration | Buffer | Use Case |
-| :--- | :--- | :--- | :--- | :--- |
-| **Standard** | 8 kHz | 5s | 80 KB | Default, balanced |
-| **HQ Short** | 16 kHz | 3s | 96 KB | High quality, quick questions |
-
-**Core2 / CoreS3** (320x240 display, ~300KB+ safe RAM):
-
-| Profile | Sample Rate | Duration | Buffer | Use Case |
-| :--- | :--- | :--- | :--- | :--- |
-| **Standard** | 8 kHz | 8s | 128 KB | Default, balanced |
-| **Long** | 8 kHz | 15s | 240 KB | Extended recording |
-| **HQ Short** | 16 kHz | 5s | 160 KB | High quality |
-
-### Switching Profiles
-
-**Hold Button B for 2 seconds** to cycle through available profiles. The display will show the new profile settings.
-
-### Device-Specific Response Length
-
-The system prompt automatically adjusts based on screen size:
-- **M5StickC Plus2:** 20 words max (fits small screen)
-- **Core2/CoreS3:** 50 words max (larger screen)
-
-Configure the base prompt and word limits in `secrets.h`:
+**CoreS3:**
 ```cpp
-const char *LLM_SYSTEM_PROMPT_BASE = " Answer";  // Base prompt
-const int LLM_MAX_WORDS_SMALL = 20;   // StickC Plus2
-const int LLM_MAX_WORDS_LARGE = 50;   // Core2/CoreS3
+#define USE_PHYSICAL_BUTTONS false  // No physical buttons
+#define ENABLE_TOUCH_UI true         // Enable touch UI
+#define ENABLE_CAMERA true           // Built-in GC0308 camera
+#define ENABLE_M5GO_LEDS false       // Disabled (GPIO 25 conflict with camera)
 ```
 
-## Text-to-Speech (Core2/CoreS3 Only)
-
-Devices with speakers (Core2, CoreS3) can speak responses aloud using OpenWebUI's TTS endpoint.
-
-### TTS Configuration
-
+**StickC Plus2:**
 ```cpp
-const bool USE_TTS = true;            // Enable spoken responses
-const char *TTS_MODEL = "tts-1";      // tts-1 or tts-1-hd
-const char *TTS_VOICE_1 = "alloy";    // Primary voice (Button C hold 2s to toggle)
-const char *TTS_VOICE_2 = "nova";     // Secondary voice
+#define USE_PHYSICAL_BUTTONS true   // Button A only
+#define ENABLE_TOUCH_UI false        // No touch screen
+#define ENABLE_CAMERA false          // No camera
+#define ENABLE_M5GO_LEDS false       // Optional accessory
 ```
 
-### Available Voices
+### API Configuration (`secrets.h`)
 
-| Voice | Description |
-| :--- | :--- |
-| **alloy** | Neutral, balanced |
-| **echo** | Warm, conversational |
-| **fable** | Expressive, storytelling |
-| **onyx** | Deep, authoritative |
-| **nova** | Friendly, upbeat |
-| **shimmer** | Soft, gentle |
+See `secrets.h` for API credentials and settings:
+- WiFi credentials
+- API endpoints (OpenAI/OpenWebUI)
+- STT/LLM/TTS settings
+- System prompts
+- Voice selection
 
-### Replay & Voice Toggle
+## Voice Activity Detection (VAD)
 
-- Press **Button C** to replay the last spoken response
-- Hold **Button C for 2 seconds** to toggle between the two configured voices
+Automatically stops recording after 1.5 seconds of silence (configurable in main `.ino` file):
+- `VAD_SILENCE_THRESHOLD` - RMS level for silence detection (default: 500)
+- `VAD_SILENCE_DURATION` - Seconds of silence before stop (default: 1.5)
+- `VAD_ENABLED` - Enable/disable VAD (default: true)
 
-## Architecture
+When using M5GO-Bottom2, VAD status is visually indicated through LED colors and patterns.
 
-### Message Flow
+## Memory Usage
 
-```
-1. User presses Button A
-2. Record audio via PDM microphone
-3. Transcribe audio → OpenAI Whisper or OpenWebUI STT
-4. Create/reuse OpenWebUI chat session
-5. Update chat with user message (proper threading)
-6. Send completion request with full conversation history
-7. Poll chat history for assistant response
-8. Save complete chat history with threading
-9. Display response on screen
-10. Speak response via TTS (Core2/CoreS3 only)
-```
-
-### OpenWebUI API Integration
-
-**Endpoints used:**
-- `POST /api/v1/audio/transcriptions` - Speech-to-text (when USE_OWUI_STT = true)
-- `POST /api/v1/audio/speech` - Text-to-speech (Core2/CoreS3 only)
-- `POST /api/v1/chats/new` - Create new chat session
-- `GET /api/v1/chats/{id}` - Fetch chat history
-- `POST /api/v1/chats/{id}` - Update chat with messages
-- `POST /api/v1/chat/completions` - Request LLM completion
-- `POST /api/chat/completed` - Signal completion
-
-**Features:**
-- UUID generation for messages and sessions
-- Unix timestamps for message ordering
-- Parent-child message linking via `parentId` and `childrenIds`
-- Model tracking in chat metadata
-- Automatic session recovery on errors (401/404)
-
-## Troubleshooting
-
-### Memory Issues
-- Reduce `RECORD_SECONDS` or `SAMPLE_RATE`
-- Monitor serial output for heap warnings
-
-### Connection Errors
-- Verify WiFi credentials
-- Check API endpoint URLs
-- Confirm API key is valid
-
-### Transcription Issues
-- Speak clearly and close to microphone
-- Reduce background noise
-- Consider increasing `SAMPLE_RATE` for better quality
-
-### Session Errors
-- Device automatically recovers from deleted sessions
-- Press Button B to manually start fresh session
-- Check OpenWebUI server availability
-
-## Development
-
-### Serial Monitor
-
-Enable serial output (115200 baud) to see:
-- WiFi connection status
-- API request/response details
-- Chat session management
-- Memory usage statistics
-- Conversation threading debug info
-
-### Contributing
-
-Contributions welcome! Areas for improvement:
-- Additional audio codecs
-- Alternative LLM backends
-- Enhanced display UI
-- Wake word support
-- Text-to-speech responses
+The code dynamically allocates audio buffers based on selected profile. Free heap is logged throughout operation for monitoring.
 
 ## License
 
-MIT License - see LICENSE file for details
+MIT License - See repository for details
